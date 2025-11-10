@@ -53,6 +53,8 @@ CREATE TABLE posts
      channel_id),
      CONSTRAINT fk_destination FOREIGN KEY(destination) REFERENCES destinations(
      channel_id)
+      CONSTRAINT unique_source_message
+   UNIQUE (source_channel_id, source_message_id)
   );
 
 CREATE TABLE accounts

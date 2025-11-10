@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Final
@@ -17,6 +18,14 @@ from militarnyi import get_militarnyi
 from model import Post
 from postillon import get_postillon
 from translation import translate, debloat_text, format_text
+
+_processing_messages = defaultdict(asyncio.Lock)
+
+
+async def get_message_lock(chat_id: int, message_id: int):
+    """Get a lock for a specific message to prevent concurrent processing"""
+    key = f"{chat_id}:{message_id}"
+    return _processing_messages[key]
 
 
 def add_logging():
@@ -168,180 +177,177 @@ async def main():
 
         @app.on_message(filters.text & bf)
         async def new_text(client: Client, message: Message):
-            logging.info(f">>>>>> {client.name}: handle_text {message.chat.id, message.text.html}", )
+            logging.info(f">>>>>> {client.name}: handle_text {message.chat.id, message.text.html}")
 
-            source = await cache.get_source(message.chat.id)
+            # Acquire lock to prevent concurrent processing
+            lock = await get_message_lock(message.chat.id, message.id)
+            async with lock:
 
-            text = await debloat_text(message, client, cache)
-            if not text:
-                return
+                text = await debloat_text(message, client, cache)
+                if not text:
+                    return
+                logging.info(f"T X -single {text}")
 
-            logging.info(f"T X -single {text}", )
+                source = await cache.get_source(message.chat.id)
 
-            backup_id = await backup_single(client, message)
-            text = await format_text(text, message, source, backup_id, cache)
+                backup_id = await backup_single(client, message)
+                text = await format_text(text, message, source, backup_id, cache)
 
-            if message.reply_to_message_id is not None:
-                reply_post = await get_post(message.chat.id, message.reply_to_message_id)
-                if reply_post is None:
-                    reply_id = None
+                if message.reply_to_message_id is not None:
+                    reply_post = await get_post(message.chat.id, message.reply_to_message_id)
+                    reply_id = reply_post.message_id if reply_post else None
                 else:
-                    reply_id = reply_post.message_id
-            else:
-                reply_id = None
+                    reply_id = None
 
-            logging.info(f"send New Text {client.name}")
-            msg = await client.send_message(source.destination, text,
-                                            link_preview_options=LinkPreviewOptions(is_disabled=True))
+                logging.info(f"send New Text {client.name}")
+                msg = await client.send_message(source.destination, text,
+                                                link_preview_options=LinkPreviewOptions(is_disabled=True))
 
-            await set_post(Post(
-                msg.chat.id,
-                msg.id,
-                message.chat.id,
-                message.id,
-                backup_id,
-                reply_id,
-                text
-            ))
+                await set_post(Post(
+                    msg.chat.id,
+                    msg.id,
+                    message.chat.id,
+                    message.id,
+                    backup_id,
+                    reply_id,
+                    text
+                ))
 
         @app.on_edited_message(filters.text & bf)
         async def edit_text(client: Client, message: Message):
-            logging.info(f">>>>>> {client.name}: edit_text {message.chat.id, message.text.html}", )
+            logging.info(f">>>>>> {client.name}: edit_text {message.chat.id, message.text.html}")
 
             if message.date < (datetime.now() - timedelta(weeks=1)):
                 return
 
             await asyncio.sleep(60)
-            post = await get_post(message.chat.id, message.id)
 
+            # Check if post exists
+            post = await get_post(message.chat.id, message.id)
             if post is None:
+                logging.info(f"Edit ignored - original post not found: {message.chat.id}/{message.id}")
                 await new_text(client, message)
                 return
 
             source = await cache.get_source(message.chat.id)
-
             text = await debloat_text(message, client, cache)
             if not text:
                 return
 
-            logging.info(f"edit text::: {post}", )
-
+            logging.info(f"edit text::: {post}")
             text = await format_text(text, message, source, post.backup_id, cache)
+
             try:
-                await client.edit_message_text(post.destination, post.message_id, text, disable_web_page_preview=True)
+                await client.edit_message_text(post.destination, post.message_id, text,
+                                               disable_web_page_preview=True)
             except MessageNotModified:
                 pass
 
         @app.on_message(filters.media_group & filters.caption & mf)
         async def new_multiple(client: Client, message: Message):
-            logging.info(f">>>>>> {client.name}: handle_multiple {message.chat.id, message.caption.html}", )
+            logging.info(f">>>>>> {client.name}: handle_multiple {message.chat.id, message.caption.html}")
 
-            source = await get_source(message.chat.id)
+            lock = await get_message_lock(message.chat.id, message.id)
+            async with lock:
 
-            text = await debloat_text(message, client, cache)
-            if not text:
-                return
+                text = await debloat_text(message, client, cache)
+                if not text:
+                    return
 
-            mg = await client.get_media_group(message.chat.id, message.id)
-            backup_id = await backup_multiple(client, mg)
-            if not source.is_spread:
-                return
+                mg = await client.get_media_group(message.chat.id, message.id)
+                backup_id = await backup_multiple(client, mg)
 
-            text = await format_text(text, message, source, backup_id, cache)
+                source = await get_source(message.chat.id)
+                if not source.is_spread:
+                    return
 
-            if message.reply_to_message_id is not None:
-                reply_post = await get_post(message.chat.id, message.reply_to_message_id)
-                if reply_post is None:
-                    reply_id = None
+                text = await format_text(text, message, source, backup_id, cache)
+
+                if message.reply_to_message_id is not None:
+                    reply_post = await get_post(message.chat.id, message.reply_to_message_id)
+                    reply_id = reply_post.message_id if reply_post else None
                 else:
-                    reply_id = reply_post.message_id
-            else:
-                reply_id = None
+                    reply_id = None
 
-            msgs = await client.copy_media_group(source.destination,
-                                                 from_chat_id=message.chat.id,
-                                                 message_id=message.id,
-                                                 captions=text)
+                msgs = await client.copy_media_group(source.destination,
+                                                     from_chat_id=message.chat.id,
+                                                     message_id=message.id,
+                                                     captions=text)
 
-            await set_post(Post(
-                msgs[0].chat.id,
-                msgs[0].id,
-                message.chat.id,
-                message.id,
-                backup_id,
-                reply_id,
-                text
-            ))
+                await set_post(Post(
+                    msgs[0].chat.id,
+                    msgs[0].id,
+                    message.chat.id,
+                    message.id,
+                    backup_id,
+                    reply_id,
+                    text
+                ))
 
-        @app.on_message(filters.caption & mf)
+        @app.on_message(~filters.media_group & filters.caption & mf)
         async def new_single(client: Client, message: Message):
             logging.info(f">>>>>> {client.name}: handle_single {message.chat.id}")
 
-            source = await cache.get_source(message.chat.id)
+            lock = await get_message_lock(message.chat.id, message.id)
+            async with lock:
+                text = await debloat_text(message, client, cache)
+                if not text:
+                    return
 
-            text = await debloat_text(message, client, cache)
-            if not text:
-                return
+                backup_id = await backup_single(client, message)
 
-            backup_id = await backup_single(client, message)
-            if not source.is_spread:
-                return
+                source = await cache.get_source(message.chat.id)
 
-            logging.info(f">>>>>> {client.name}: handle_single {source, message.chat.id, backup_id}")
-            text = await format_text(text, message, source, backup_id, cache)
+                if not source.is_spread:
+                    return
 
-            if message.reply_to_message_id is not None:
-                reply_post = await  get_post(message.chat.id, message.reply_to_message_id)
-                if reply_post is None:
+                logging.info(f">>>>>> {client.name}: handle_single {source, message.chat.id, backup_id}")
+                text = await format_text(text, message, source, backup_id, cache)
+
+                if message.reply_to_message_id is not None:
+                    reply_post = await get_post(message.chat.id, message.reply_to_message_id)
+                    reply_id = reply_post.message_id if reply_post else None
+                else:
                     reply_id = None
 
-                else:
-                    reply_id = reply_post.message_id
-            else:
-                reply_id = None
+                logging.info(f"---- new single {client.name}----- {source}")
+                msg = await message.copy(source.destination, caption=text)
 
-            logging.info(f"---- new single {client.name}----- {source}")
-            msg = await message.copy(source.destination, caption=text)  # media caption too long
+                await set_post(Post(
+                    msg.chat.id,
+                    msg.id,
+                    message.chat.id,
+                    message.id,
+                    backup_id,
+                    reply_id,
+                    text
+                ))
 
-            await set_post(Post(
-                msg.chat.id,
-                msg.id,
-                message.chat.id,
-                message.id,
-                backup_id,
-                reply_id,
-                text
-            ))
-
-            logging.info(f"----------------------------------------------------")
+                logging.info(f"----------------------------------------------------")
 
         @app.on_edited_message(filters.caption & mf)
         async def edit_caption(client: Client, message: Message):
-            logging.info(f">>>>>> {client.name}: edit_caption {message.chat.id, message.caption.html}", )
+            logging.info(f">>>>>> {client.name}: edit_caption {message.chat.id, message.caption.html}")
 
+            # Ignore old edits
             if message.date < (datetime.now() - timedelta(weeks=1)):
                 return
 
-            await asyncio.sleep(60)
+            # Check if post exists FIRST - no sleep needed
             post = await get_post(message.chat.id, message.id)
-
             if post is None:
-                if message.media_group_id is None:
-                    await new_single(client, message)
-                else:
-                    await new_multiple(client, message)
-                return
-
-            source = await cache.get_source(message.chat.id)
+                logging.warning(f"Edit ignored - original caption not found: {message.chat.id}/{message.id}")
+                return  # Don't create new post, just skip the edit
 
             text = await debloat_text(message, client, cache)
             if not text:
                 return
 
+            source = await cache.get_source(message.chat.id)
             text = await format_text(text, message, source, post.backup_id, cache)
 
             try:
-                logging.info(f"edit_caption ::::::::::::::::::::: {post}", )
+                logging.info(f"edit_caption ::::::::::::::::::::: {post}")
                 await client.edit_message_caption(post.destination, post.message_id, text)
             except MessageNotModified:
                 pass
