@@ -10,6 +10,7 @@ from pyrogram.enums import ParseMode
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import Message, InputMediaVideo, InputMediaPhoto, LinkPreviewOptions
 
+from bot.db_cache import get_cache
 from config import CHANNEL_BACKUP, CHANNEL_TEST, CHANNEL_UA, TESTING, PASSWORD, GROUP_LOG, CONTAINER
 from db import get_source, get_source_ids_by_api_id, get_post, set_post, get_accounts
 from militarnyi import get_militarnyi
@@ -79,6 +80,12 @@ def list_dir_tree(start_path):
 async def main():
     add_logging()
 
+    # Initialize cache at startup
+    cache = get_cache(cache_duration_minutes=30)
+
+    # Pre-warm the cache by loading all sources
+    await cache.refresh_sources()
+
     print(f"Running PRINT ...")
     logging.info(f"Running LOGGING ...")
 
@@ -101,7 +108,7 @@ async def main():
             #     workdir="/sessions"
         )
 
-        sources = await get_source_ids_by_api_id(a.api_id)
+        sources: List[int] = await get_source_ids_by_api_id(a.api_id)
 
         if not TESTING:
             remove_sources = [CHANNEL_TEST, -1001011817559, -1001123527809]
@@ -118,19 +125,19 @@ async def main():
 
                 cp = await get_militarnyi(message)
 
-                source = await get_source(message.chat.id)
+                source = await cache.get_source(message.chat.id)
 
                 medias = list()
                 for v in cp.video_urls:
                     medias.append(InputMediaVideo(v))
                 for v in cp.image_urls:
                     medias.append(InputMediaPhoto(v))
-                medias[0].caption = await format_text(translate(cp.caption), message, source, backup_id)
+                medias[0].caption = await format_text(translate(cp.caption), message, source, backup_id, cache)
 
                 msg = (await client.send_media_group(CHANNEL_UA, medias))[0]
 
                 for text in cp.texts:
-                    text = await  format_text(translate(text), message, source, backup_id)
+                    text = await  format_text(translate(text), message, source, backup_id, cache)
                     msg = await client.send_message(CHANNEL_UA, text, reply_to_message_id=msg.id,
                                                     disable_web_page_preview=True)
 
@@ -149,11 +156,11 @@ async def main():
 
                 print("postillon")
 
-                source = await get_source(message.chat.id)
+                source = await cache.get_source(message.chat.id)
 
                 msg = await client.send_photo(source.destination,
                                               cp.image_urls[0],
-                                              await     format_text(cp.caption, message, source, backup_id)
+                                              await     format_text(cp.caption, message, source, backup_id, cache)
                                               )
 
         bf = filters.channel & filters.chat(sources) & ~filters.forwarded & filters.incoming
@@ -163,16 +170,16 @@ async def main():
         async def new_text(client: Client, message: Message):
             logging.info(f">>>>>> {client.name}: handle_text {message.chat.id, message.text.html}", )
 
-            source = await get_source(message.chat.id)
+            source = await cache.get_source(message.chat.id)
 
-            text = await debloat_text(message, client)
+            text = await debloat_text(message, client, cache)
             if not text:
                 return
 
             logging.info(f"T X -single {text}", )
 
             backup_id = await backup_single(client, message)
-            text = await format_text(text, message, source, backup_id)
+            text = await format_text(text, message, source, backup_id, cache)
 
             if message.reply_to_message_id is not None:
                 reply_post = await get_post(message.chat.id, message.reply_to_message_id)
@@ -211,15 +218,15 @@ async def main():
                 await new_text(client, message)
                 return
 
-            source = await get_source(message.chat.id)
+            source = await cache.get_source(message.chat.id)
 
-            text = await debloat_text(message, client)
+            text = await debloat_text(message, client, cache)
             if not text:
                 return
 
             logging.info(f"edit text::: {post}", )
 
-            text = await format_text(text, message, source, post.backup_id)
+            text = await format_text(text, message, source, post.backup_id, cache)
             try:
                 await client.edit_message_text(post.destination, post.message_id, text, disable_web_page_preview=True)
             except MessageNotModified:
@@ -231,7 +238,7 @@ async def main():
 
             source = await get_source(message.chat.id)
 
-            text = await debloat_text(message, client)
+            text = await debloat_text(message, client, cache)
             if not text:
                 return
 
@@ -240,7 +247,7 @@ async def main():
             if not source.is_spread:
                 return
 
-            text = await format_text(text, message, source, backup_id)
+            text = await format_text(text, message, source, backup_id, cache)
 
             if message.reply_to_message_id is not None:
                 reply_post = await get_post(message.chat.id, message.reply_to_message_id)
@@ -270,9 +277,9 @@ async def main():
         async def new_single(client: Client, message: Message):
             logging.info(f">>>>>> {client.name}: handle_single {message.chat.id}")
 
-            source = await get_source(message.chat.id)
+            source = await cache.get_source(message.chat.id)
 
-            text = await debloat_text(message, client)
+            text = await debloat_text(message, client, cache)
             if not text:
                 return
 
@@ -281,7 +288,7 @@ async def main():
                 return
 
             logging.info(f">>>>>> {client.name}: handle_single {source, message.chat.id, backup_id}")
-            text = await format_text(text, message, source, backup_id)
+            text = await format_text(text, message, source, backup_id, cache)
 
             if message.reply_to_message_id is not None:
                 reply_post = await  get_post(message.chat.id, message.reply_to_message_id)
@@ -325,13 +332,13 @@ async def main():
                     await new_multiple(client, message)
                 return
 
-            source = await get_source(message.chat.id)
+            source = await cache.get_source(message.chat.id)
 
-            text = await debloat_text(message, client)
+            text = await debloat_text(message, client, cache)
             if not text:
                 return
 
-            text = await format_text(text, message, source, post.backup_id)
+            text = await format_text(text, message, source, post.backup_id, cache)
 
             try:
                 logging.info(f"edit_caption ::::::::::::::::::::: {post}", )

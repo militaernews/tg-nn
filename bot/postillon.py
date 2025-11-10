@@ -12,7 +12,7 @@ bloat = {
 }
 
 
-async def get_postillon(message: Message) -> Optional[CrawlPost ]:
+async def get_postillon(message: Message) -> Optional[CrawlPost]:
     url = message.reply_markup.inline_keyboard[0][0].url
 
     res = httpx.get(url)

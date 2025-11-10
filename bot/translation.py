@@ -11,7 +11,6 @@ from pyrogram.types import Message
 from config import DEEPL, GROUP_PATTERN
 from constant import (PLACEHOLDER, PATTERN_REPLACEMENT, PATTERN_HTMLTAG, PATTERN_HASHTAG, emoji_space_pattern,
                       emoji_pattern, PATTERN_FITZPATRICK, REPLACEMENTS, PATTERN_PARAGRAPH)
-from db import get_patterns, get_footer
 from model import SourceDisplay
 
 translator = deepl.Translator(DEEPL)
@@ -75,28 +74,32 @@ def translate(text: str) -> str:
     return translated_text
 
 
-async def format_text(text: str, message: Message, source: SourceDisplay, backup_id: int) -> str:
+from bot.db_cache import DBCache
+
+
+# Update format_text signature to accept cache
+async def format_text(text: str, message: Message, source: SourceDisplay, backup_id: int, cache: DBCache) -> str:
     formatted = f"{text}\n\nQuelle: <a href='{message.link}'>{source.display_name}"
     if source.bias is not None:
         formatted += f" {source.bias}"
     formatted += f"</a> |<a href='https://t.me/nn_backup/{backup_id}'> 💾 </a>"
 
     if source.username is None and source.invite is not None:
-        # todo: remove if detail added
         formatted += f"|<a href='https://t.me/+{source.invite}'> 🔗️ </a>"
 
     if source.detail_id is not None:
         formatted += f"|<a href='https://t.me/nn_sources/{source.detail_id}'> ℹ️ </a>"
 
-    footer = await get_footer(source.destination)
+    # Use cached footer instead of direct db call
+    footer = await cache.get_footer(source.destination)
     if footer is not None:
         formatted += footer
 
-    #   logging.info(f"-------------------------\n>>>>>>>> formatted:\n", formatted)
     return formatted
 
 
-async def debloat_message(message: Message, client: Client) -> bool | str:
+# Update debloat_message signature to accept cache
+async def debloat_message(message: Message, client: Client, cache: DBCache) -> bool | str:
     if message.caption is not None:
         limit = 20
         text = message.caption.html
@@ -107,12 +110,13 @@ async def debloat_message(message: Message, client: Client) -> bool | str:
     if len(re.findall(BLACKLIST, text)) != 0:
         return False
 
-    patterns = await get_patterns(message.chat.id)
+    # Use cached patterns instead of direct db call
+    patterns = await cache.get_patterns(message.chat.id)
 
     text = PATTERN_HTMLTAG.sub("", text).rstrip()
 
     if patterns is not None and len(patterns) != 0:
-        pat = [escape(re.sub(PATTERN_HTMLTAG, '', p)) for p in patterns]  # .replace(" ", r'\s*')
+        pat = [escape(re.sub(PATTERN_HTMLTAG, '', p)) for p in patterns]
         pattern = fr"({')|('.join(pat)})"
 
         result = re.findall(pattern, text, flags=re.IGNORECASE)
@@ -125,12 +129,11 @@ async def debloat_message(message: Message, client: Client) -> bool | str:
             await client.send_message(GROUP_PATTERN, text, parse_mode=ParseMode.DISABLED)
 
             logging.info(f"-- doesnt match --\n\n{text}\n\n---")
-            return False  # comment out, if you want to send it despite not matching pattern, might bring in ads
+            return False
 
         text = re.sub(pattern, "", text)
 
     text = re.sub(f"@{message.chat.username}$", "", text, flags=re.IGNORECASE).rstrip()
-    # logging.info(f"<<<<< subbed  {text}")
     text = PATTERN_HASHTAG.sub("", text, ).rstrip()
     logging.info(f"<<<<< hashtag :  {text}")
 
@@ -147,8 +150,9 @@ async def debloat_message(message: Message, client: Client) -> bool | str:
     return text
 
 
-async def debloat_text(message: Message, client: Client) -> bool | str:
-    text = await debloat_message(message, client)
+# Update debloat_text signature to accept cache
+async def debloat_text(message: Message, client: Client, cache: DBCache) -> bool | str:
+    text = await debloat_message(message, client, cache)
 
     if not text:
         return False
@@ -157,9 +161,6 @@ async def debloat_text(message: Message, client: Client) -> bool | str:
 
     text = re.sub(emoji_space_pattern, r"\1 \2", text)
     logging.info(f"<<<<< spaced  {text}")
-
-    #    emoji.get_emoji_list["en"]
-    # emoji.replace_emoji('Python is 👍', replace='')
 
     emojis = emoji_pattern.findall(text)
     logging.info(f">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> emoijis: {emojis}")
@@ -171,7 +172,6 @@ async def debloat_text(message: Message, client: Client) -> bool | str:
     logging.info(f"<<<<< spaced_BEFORE::: {text}", )
 
     for abbreviation, meaning in ABBREVIATIONS.items():
-        # Use word boundaries to ensure full word matching
         text = re.sub(r'\b' + re.escape(abbreviation) + r'\b', meaning, text, flags=re.IGNORECASE)
 
     text = translate(text)
