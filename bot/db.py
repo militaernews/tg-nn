@@ -87,7 +87,7 @@ async def get_patterns(channel_id: int, conn: Connection) -> List[str]:
 async def get_source(channel_id: int, conn: Connection) -> SourceDisplay:
     record: Record = await conn.fetchrow("select * from sources where channel_id = $1;", channel_id)
 
-    sd:SourceDisplay = record_to_dataclass(record, SourceDisplay)
+    sd: SourceDisplay = record_to_dataclass(record, SourceDisplay)
 
     if sd.display_name is None:
         sd.display_name = record["channel_name"]
