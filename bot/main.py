@@ -19,32 +19,27 @@ from model import Post
 from postillon import get_postillon
 from translation import translate, debloat_text, format_text
 
-_processing_messages = defaultdict(asyncio.Lock)
+processing_messages = defaultdict(asyncio.Lock)
 
 
 async def get_message_lock(chat_id: int, message_id: int):
     """Get a lock for a specific message to prevent concurrent processing"""
     key = f"{chat_id}:{message_id}"
-    return _processing_messages[key]
+    return processing_messages[key]
 
 
 def add_logging():
     if CONTAINER:
-        # log_filename: Final[str] = rf"../logs/{datetime.now().strftime('%Y-%m-%d/%H-%M-%S')}.log"
-        #   os.makedirs(os.path.dirname(log_filename), exist_ok=True)
         logging.basicConfig(
             format="%(asctime)s %(levelname)-5s %(funcName)-20s [%(filename)s:%(lineno)d]: %(message)s",
             encoding="utf-8",
-
             level=logging.INFO,
             datefmt='%Y-%m-%d %H:%M:%S',
             handlers=[
                 logging.StreamHandler(),
-                #   logging.FileHandler(log_filename)
             ],
             force=True,
         )
-
     else:
         log_filename: Final[str] = rf"../logs/{datetime.now().strftime('%Y-%m-%d/%H-%M-%S')}.log"
         os.makedirs(os.path.dirname(log_filename), exist_ok=True)
@@ -62,26 +57,23 @@ def add_logging():
 
 async def backup_single(client: Client, message: Message) -> int:
     msg_backup = await client.forward_messages(CHANNEL_BACKUP, message.chat.id, message.id)
-    logging.debug(f"Backup single: {msg_backup.link}", )
+    logging.debug(f"Backup single: {msg_backup.link}")
     return msg_backup.id
 
 
 async def backup_multiple(client: Client, messages: List[Message]) -> int:
     msg_ids = [message.id for message in messages]
     msg_backup = (await client.forward_messages(CHANNEL_BACKUP, messages[0].chat.id, msg_ids))[0]
-    logging.debug(f"Backup multiple: {msg_backup.link}", )
+    logging.debug(f"Backup multiple: {msg_backup.link}")
     return msg_backup.id
 
 
-def list_dir_tree(start_path):
+def listdirtree(start_path):
     for root, dirs, files in os.walk(start_path):
-        # Determine indentation level
         level = root.replace(start_path, '').count(os.sep)
         indent = ' ' * 4 * level
-        # Print folder name
         print(f'{indent}{os.path.basename(root)}/')
         sub_indent = ' ' * 4 * (level + 1)
-        # Print files in the folder
         for f in files:
             print(f'{sub_indent}{f}')
 
@@ -89,11 +81,8 @@ def list_dir_tree(start_path):
 async def main():
     add_logging()
 
-    # Initialize cache at startup
+    # Initialize cache at startup - DON'T pre-warm automatically
     cache = get_cache(cache_duration_minutes=30)
-
-    # Pre-warm the cache by loading all sources
-    await cache.refresh_sources()
 
     print(f"Running PRINT ...")
     logging.info(f"Running LOGGING ...")
@@ -114,14 +103,12 @@ async def main():
             password=PASSWORD,
             lang_code="de",
             parse_mode=ParseMode.HTML,
-            #     workdir="/sessions"
         )
 
         sources: List[int] = await get_source_ids_by_api_id(a.api_id)
 
         if not TESTING:
             remove_sources = [CHANNEL_TEST, -1001011817559, -1001123527809]
-
             for channel_id in remove_sources:
                 while channel_id in sources:
                     sources.remove(channel_id)
@@ -130,10 +117,8 @@ async def main():
             @app.on_message(filters.caption & filters.chat([CHANNEL_TEST, -1001011817559]) & filters.photo)
             async def test_video(client: Client, message: Message):
                 backup_id = await backup_single(client, message)
-                # await client.send_message(CHANNEL_TEST, "Artikel lädt [der Download von Videos/Bildern dauert etwas]")
 
                 cp = await get_militarnyi(message)
-
                 source = await cache.get_source(message.chat.id)
 
                 medias = list()
@@ -146,31 +131,28 @@ async def main():
                 msg = (await client.send_media_group(CHANNEL_UA, medias))[0]
 
                 for text in cp.texts:
-                    text = await  format_text(translate(text), message, source, backup_id, cache)
+                    text = await format_text(translate(text), message, source, backup_id, cache)
                     msg = await client.send_message(CHANNEL_UA, text, reply_to_message_id=msg.id,
                                                     disable_web_page_preview=True)
 
-                for f in cp.image_urls + cp.image_urls:
+                for f in cp.image_urls + cp.video_urls:
                     Path(f).unlink(missing_ok=True)
 
         if TESTING and a.name == "Martin":
-            @app.on_message(filters.chat([CHANNEL_TEST]) & filters.inline_keyboard)  # , -1001123527809
+            @app.on_message(filters.chat([CHANNEL_TEST]) & filters.inline_keyboard)
             async def handle_postillion(client: Client, message: Message):
                 print("postillon", message)
 
                 backup_id = await backup_single(client, message)
-                #  await client.send_message(CHANNEL_TEST, "Artikel lädt [der Download von Videos/Bildern dauert etwas]")
 
                 cp = await get_postillon(message)
-
                 print("postillon")
 
                 source = await cache.get_source(message.chat.id)
 
                 msg = await client.send_photo(source.destination,
                                               cp.image_urls[0],
-                                              await     format_text(cp.caption, message, source, backup_id, cache)
-                                              )
+                                              await format_text(cp.caption, message, source, backup_id, cache))
 
         bf = filters.channel & filters.chat(sources) & ~filters.forwarded & filters.incoming
         mf = bf & (filters.photo | filters.video | filters.animation)
@@ -179,10 +161,8 @@ async def main():
         async def new_text(client: Client, message: Message):
             logging.info(f">>>>>> {client.name}: handle_text {message.chat.id, message.text.html}")
 
-            # Acquire lock to prevent concurrent processing
             lock = await get_message_lock(message.chat.id, message.id)
             async with lock:
-
                 text = await debloat_text(message, client, cache)
                 if not text:
                     return
@@ -223,7 +203,6 @@ async def main():
 
             await asyncio.sleep(60)
 
-            # Check if post exists
             post = await get_post(message.chat.id, message.id)
             if post is None:
                 logging.info(f"Edit ignored - original post not found: {message.chat.id}/{message.id}")
@@ -250,7 +229,6 @@ async def main():
 
             lock = await get_message_lock(message.chat.id, message.id)
             async with lock:
-
                 text = await debloat_text(message, client, cache)
                 if not text:
                     return
@@ -296,7 +274,6 @@ async def main():
                     return
 
                 backup_id = await backup_single(client, message)
-
                 source = await cache.get_source(message.chat.id)
                 if not source.is_spread:
                     return
@@ -329,15 +306,13 @@ async def main():
         async def edit_caption(client: Client, message: Message):
             logging.info(f">>>>>> {client.name}: edit_caption {message.chat.id, message.caption.html}")
 
-            # Ignore old edits
             if message.date < (datetime.now() - timedelta(weeks=1)):
                 return
 
-            # Check if post exists FIRST - no sleep needed
             post = await get_post(message.chat.id, message.id)
             if post is None:
                 logging.warning(f"Edit ignored - original caption not found: {message.chat.id}/{message.id}")
-                return  # Don't create new post, just skip the edit
+                return
 
             text = await debloat_text(message, client, cache)
             if not text:
@@ -352,9 +327,21 @@ async def main():
             except MessageNotModified:
                 pass
 
+        @app.on_message(filters.command("refresh"))
+        async def handle_refresh(client: Client, message: Message):
+            """Refresh cache for this account's sources"""
+            logging.info(f"Refresh command from user {message.from_user.id} on account {client.name}")
+
+            try:
+                await cache.refresh_sources()
+                await message.reply_text("✅ Cache refreshed successfully for all sources")
+                logging.info(f"Cache refreshed successfully for account {client.name}")
+            except Exception as e:
+                await message.reply_text(f"❌ Error refreshing cache: {str(e)}")
+                logging.error(f"Error refreshing cache for account {client.name}: {e}")
+
         @app.on_message(filters.command("join"))
         async def handle_join(client: Client, message: Message):
-
             args = message.text.split(" ")[1:]
             joined_chat = args[0]
             joined_by = args[1]
@@ -364,10 +351,10 @@ async def main():
                 await message.reply_text(f"/join {joined_chat} {joined_by} ARGS_DONT_MATCH")
                 await client.send_message(GROUP_LOG, message_thread_id=489,
                                           text=f"ARGS_DONT_MATCH {joined_chat} {joined_by}\n\n{message.text}")
+                return
 
             try:
                 chat = await client.join_chat(joined_chat)
-
                 await message.reply_text(f"/join {joined_chat} {joined_by} JOIN_SUCCESS")
                 await client.send_message(GROUP_LOG, message_thread_id=489,
                                           text=f"Joined {joined_chat} {joined_by}\n\n{chat}")
@@ -379,7 +366,6 @@ async def main():
         @app.on_message(filters.command("leave"))
         async def handle_leave(client: Client, message: Message):
             logging.info(f"leave by user {message.from_user.id}")
-
             chat = await client.leave_chat(message.text.split(" ")[1])
             await message.reply_text(f"Tried to leave. Result:\n\n{chat}")
 
