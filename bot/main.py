@@ -13,7 +13,7 @@ from pyrogram.types import Message, InputMediaVideo, InputMediaPhoto, LinkPrevie
 
 from bot.db_cache import get_cache
 from config import CHANNEL_BACKUP, CHANNEL_TEST, CHANNEL_UA, TESTING, PASSWORD, GROUP_LOG, CONTAINER
-from db import get_source, get_source_ids_by_api_id, get_post, set_post, get_accounts
+from db import  get_source_ids_by_api_id, get_post, set_post, get_accounts
 from militarnyi import get_militarnyi
 from model import Post
 from postillon import get_postillon
@@ -62,7 +62,7 @@ def add_logging():
 
 async def backup_single(client: Client, message: Message) -> int:
     msg_backup = await client.forward_messages(CHANNEL_BACKUP, message.chat.id, message.id)
-    logging.debug(f"Backup singl: {msg_backup.link}", )
+    logging.debug(f"Backup single: {msg_backup.link}", )
     return msg_backup.id
 
 
@@ -188,9 +188,10 @@ async def main():
                     return
                 logging.info(f"T X -single {text}")
 
+                backup_id = await backup_single(client, message)
+
                 source = await cache.get_source(message.chat.id)
 
-                backup_id = await backup_single(client, message)
                 text = await format_text(text, message, source, backup_id, cache)
 
                 if message.reply_to_message_id is not None:
@@ -257,7 +258,7 @@ async def main():
                 mg = await client.get_media_group(message.chat.id, message.id)
                 backup_id = await backup_multiple(client, mg)
 
-                source = await get_source(message.chat.id)
+                source = await cache.get_source(message.chat.id)
                 if not source.is_spread:
                     return
 
@@ -297,7 +298,6 @@ async def main():
                 backup_id = await backup_single(client, message)
 
                 source = await cache.get_source(message.chat.id)
-
                 if not source.is_spread:
                     return
 

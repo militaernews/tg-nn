@@ -42,7 +42,7 @@ class DBPool:
         if cls.is_test():
             return None
         if cls._pool is None:
-            cls._pool = await create_pool(DATABASE_URL)
+            cls._pool =  create_pool(DATABASE_URL)
         return cls._pool
 
     @classmethod
@@ -99,11 +99,14 @@ async def get_source(channel_id: int, conn: Connection) -> SourceDisplay:
 @db
 async def get_sources(conn: Connection) -> dict[int, SourceDisplay]:
     records: List[Record] = await conn.fetch("select * from sources")
-
-    return {
-        r["channel_id"]: record_to_dataclass(r, SourceDisplay)
-        for r in records
-    }
+    result = {}
+    for r in records:
+        source_display = record_to_dataclass(r, SourceDisplay)
+        # Use channel_name if display_name is None or empty
+        if not source_display.display_name:
+            source_display.display_name = r["channel_name"]
+        result[r["channel_id"]] = source_display
+    return result
 
 
 @db
