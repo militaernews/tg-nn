@@ -42,7 +42,7 @@ class DBPool:
         if cls.is_test():
             return None
         if cls._pool is None:
-            cls._pool =  create_pool(DATABASE_URL)
+            cls._pool =  await create_pool(DATABASE_URL)
         return cls._pool
 
     @classmethod
