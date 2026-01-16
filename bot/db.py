@@ -173,6 +173,11 @@ async def set_destination(destination: Destination, conn: Connection):
     await conn.execute("INSERT INTO destinations( channel_id, name, group_id  ) VALUES ( $1, $2, $3)",
                        destination.channel_id, destination.name, destination.group_id)
 
+@db
+async def get_destinations(conn: Connection) -> List[Destination]:
+    records = await conn.fetch("SELECT * FROM destinations")
+    return [record_to_dataclass(r, Destination) for r in records]
+
 
 @db
 async def get_accounts(conn: Connection) -> List[Account]:
