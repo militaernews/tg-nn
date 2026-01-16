@@ -27,13 +27,16 @@ ABBREVIATIONS = {
     "AFU": "ukrainian Armed forces"
 }
 
+# Telegram caption limit - use conservative estimate for safety
+TELEGRAM_CAPTION_LIMIT = 1024
+# Reserve space for footer (approximate max size)
+FOOTER_RESERVE = 200
+
 
 def escape(string: str) -> str:
-    return re.escape(string)  # .replace(' ',r'\s+')
+    return re.escape(string)
 
 
-# might also be able to handle too long posts for caption.
-# just input a threshold parameter here, then send the rest in a separate message
 def chunk_paragraphs(text: str) -> str:
     if len(text) <= 1200 and len(re.findall(f'\n\n', text)) < 5:
         return text
@@ -45,29 +48,65 @@ def chunk_paragraphs(text: str) -> str:
             res[-1] += f' {chunk}'
         else:
             res.append(f'{chunk}')
-    return "\n\n".join(res)  # fixme: cuts random letters at the end of sentences that are within a paragraph
+    return "\n\n".join(res)
 
 
-def translate(text: str) -> str:
+def truncate_text(text: str, max_length: int) -> str:
+    """
+    Simple truncation at sentence boundary. Fast and efficient.
+    """
+    if len(text) <= max_length:
+        return text
+
+    # Reserve space for ellipsis
+    max_length -= 4
+    truncated = text[:max_length]
+
+    # Find last sentence ending
+    last_end = max(
+        truncated.rfind('.'),
+        truncated.rfind('!'),
+        truncated.rfind('?'),
+        truncated.rfind('\n\n')
+    )
+
+    # Use sentence boundary if reasonable, otherwise hard cut
+    if last_end > max_length * 0.6:
+        truncated = truncated[:last_end + 1]
+
+    return truncated.rstrip() + " ..."
+
+
+def translate(text: str, is_caption: bool = False) -> str:
+    """
+    Translate text. If is_caption=True, pre-truncate to avoid translating excess text.
+    """
+    # Pre-truncate long captions before translation to save API calls
+    if is_caption and len(text) > TELEGRAM_CAPTION_LIMIT - FOOTER_RESERVE:
+        logging.info(
+            f"Pre-truncating caption before translation: {len(text)} -> {TELEGRAM_CAPTION_LIMIT - FOOTER_RESERVE}")
+        text = truncate_text(text, TELEGRAM_CAPTION_LIMIT - FOOTER_RESERVE)
+
     try:
-
         translated_text = translator.translate_text(text,
                                                     target_lang="de",
                                                     split_sentences=SplitSentences.ALL,
                                                     tag_handling="html",
-                                                    #     preserve_formatting=True
                                                     ).text
 
     except QuotaExceededException:
         logging.info("--- Quota exceeded ---")
         translated_text = GoogleTranslator(source='auto', target="de").translate(text=text)
-        pass
     except Exception as e:
         logging.error(f"--- other error translating --- {e}")
         translated_text = GoogleTranslator(source='auto', target="de").translate(text=text)
-        pass
 
     translated_text = chunk_paragraphs(translated_text)
+
+    # Post-translation safety check for captions
+    if is_caption and len(translated_text) > TELEGRAM_CAPTION_LIMIT - FOOTER_RESERVE:
+        logging.warning(f"Post-translation truncation needed: {len(translated_text)} chars")
+        translated_text = truncate_text(translated_text, TELEGRAM_CAPTION_LIMIT - FOOTER_RESERVE)
 
     logging.info(f"paragraphed ::::::: {translated_text}")
 
@@ -77,8 +116,12 @@ def translate(text: str) -> str:
 from bot.db_cache import DBCache
 
 
-# Update format_text signature to accept cache
-async def format_text(text: str, message: Message, source: SourceDisplay, backup_id: int, cache: DBCache) -> str:
+async def format_text(text: str, message: Message, source: SourceDisplay, backup_id: int,
+                      footer: str | None = None) -> str:
+    """
+    Format text with footer. Simple and fast - no length checking here.
+    Length checking should be done before calling this function.
+    """
     formatted = f"{text}\n\nQuelle: <a href='{message.link}'>{source.display_name}"
     if source.bias is not None:
         formatted += f" {source.bias}"
@@ -90,15 +133,12 @@ async def format_text(text: str, message: Message, source: SourceDisplay, backup
     if source.detail_id is not None:
         formatted += f"|<a href='https://t.me/nn_sources/{source.detail_id}'> ℹ️ </a>"
 
-    # Use cached footer instead of direct db call
-    footer = await cache.get_footer(source.destination)
     if footer is not None:
         formatted += footer
 
     return formatted
 
 
-# Update debloat_message signature to accept cache
 async def debloat_message(message: Message, client: Client, cache: DBCache) -> bool | str:
     if message.caption is not None:
         limit = 20
@@ -150,8 +190,10 @@ async def debloat_message(message: Message, client: Client, cache: DBCache) -> b
     return text
 
 
-# Update debloat_text signature to accept cache
-async def debloat_text(message: Message, client: Client, cache: DBCache) -> bool | str:
+async def debloat_text(message: Message, client: Client, cache: DBCache, is_caption: bool = False) -> bool | str:
+    """
+    Process and translate text. Pass is_caption=True to enable length limits.
+    """
     text = await debloat_message(message, client, cache)
 
     if not text:
@@ -174,7 +216,8 @@ async def debloat_text(message: Message, client: Client, cache: DBCache) -> bool
     for abbreviation, meaning in ABBREVIATIONS.items():
         text = re.sub(r'\b' + re.escape(abbreviation) + r'\b', meaning, text, flags=re.IGNORECASE)
 
-    text = translate(text)
+    # Translate with caption awareness - truncates before translation if needed
+    text = translate(text, is_caption=is_caption)
 
     logging.info(f"--------------------------------------------------------\n\n------ TRANS -single {text, emojis}", )
 
