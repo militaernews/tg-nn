@@ -130,4 +130,6 @@ async def get_destination(text: str, source_id: int, cache) -> int:
         return None
 
     # Try LLM routing, falls back to source_default if confidence too low or error
-    return await route_message(text, source_default, cache)
+    destination = await route_message(text, source_default, cache)
+    logging.info("Destination: %s for SourceId %d and Text %s", destination,source_id,text)
+    return destination
