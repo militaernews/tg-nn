@@ -1,24 +1,32 @@
 """
 Fast LLM-based regional routing using OpenRouter API.
+Optimized with connection pooling and pre-computed mappings.
 """
-import os
 import json
 import logging
-import httpx
+import os
 
-from bot.db import get_destinations
+from httpx import AsyncClient, Limits
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Reuse HTTP client
+# Reuse HTTP client with connection pooling
 _http_client = None
 
 
 def get_http_client():
+    """Get or create HTTP client with optimized connection pooling."""
     global _http_client
     if _http_client is None:
-        _http_client = httpx.AsyncClient(timeout=15.0)
+        _http_client = AsyncClient(
+            timeout=15.0,
+            limits=Limits(
+                max_connections=100,
+                max_keepalive_connections=20,
+                keepalive_expiry=30.0
+            )
+        )
     return _http_client
 
 
@@ -26,21 +34,22 @@ async def route_message(text: str, default_dest: int, cache) -> int:
     """
     Route message to regional destination based on content.
     Returns destination channel_id.
+    Optimized with pre-computed mappings and minimal async overhead.
     """
     if not text:
         return default_dest
 
-
     try:
-        # Get destinations
-        dests = await get_destinations()
-        if not dests:
+        # Get pre-computed destination mappings (synchronous, no await!)
+        dest_map = cache.get_destination_map()
+        if not dest_map:
+            logging.warning("No destinations in cache, using default")
             return default_dest
 
-        dest_map = {d.name.lower(): d.channel_id for d in dests}
-        regions = list(dest_map.keys())
+        # Get pre-computed regions list (synchronous, no await!)
+        regions = cache.get_destination_regions()
 
-        # Fast LLM call
+        # Fast LLM call with optimized HTTP client
         client = get_http_client()
         response = await client.post(
             OPENROUTER_URL,
@@ -49,7 +58,7 @@ async def route_message(text: str, default_dest: int, cache) -> int:
                 "Content-Type": "application/json"
             },
             json={
-                "model": "anthropic/claude-3.5-sonnet",
+                "model": "allenai/olmo-3.1-32b-think:free",
                 "messages": [{
                     "role": "user",
                     "content": f"""Classify this news into ONE region: {', '.join(regions)}
@@ -74,24 +83,35 @@ Reply ONLY with JSON: {{"region": "name", "confidence": 0.9}}"""
         result = response.json()
         content = result["choices"][0]["message"]["content"].strip()
 
-        # Parse JSON
+        # Optimized JSON parsing
         if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
+            # Extract content between backticks efficiently
+            start = content.find("```")
+            end = content.rfind("```")
+            if start != -1 and end != -1 and end > start:
+                content = content[start+3:end].replace("json", "", 1).strip()
 
         data = json.loads(content)
         region = data["region"].lower()
         confidence = data["confidence"]
 
-        # Route if confident
-        if confidence >= 0.6 and region in dest_map:
-            channel_id = dest_map[region]
-            logging.info(f"LLM Route → {region.upper()} (conf: {confidence:.2f})")
-            return channel_id
+        # Route if confident - single O(1) dict lookup
+        if confidence >= 0.6:
+            channel_id = dest_map.get(region)
+            if channel_id:
+                logging.info(f"LLM Route → {region.upper()} (conf: {confidence:.2f})")
+                return channel_id
+            else:
+                logging.warning(f"Unknown region '{region}' from LLM, using default")
         else:
-            logging.info(f"Low confidence ({confidence:.2f}), using source default destination")
+            logging.info(f"Low confidence ({confidence:.2f}), using source default")
 
+    except json.JSONDecodeError as e:
+        logging.error(f"JSON parsing error: {e}, content: {content[:200]}")
+    except KeyError as e:
+        logging.error(f"Missing key in LLM response: {e}")
     except Exception as e:
-        logging.error(f"Routing error: {e}")
+        logging.error(f"Routing error: {e}", exc_info=True)
 
     # Use source's configured destination
     return default_dest
@@ -99,6 +119,7 @@ Reply ONLY with JSON: {{"region": "name", "confidence": 0.9}}"""
 
 async def get_destination(text: str, source_id: int, cache) -> int:
     """Get destination for message. Falls back to source's configured destination."""
+    # Get source from cache (single O(1) dict lookup)
     source = await cache.get_source(source_id)
 
     # Use source's configured destination as default/fallback

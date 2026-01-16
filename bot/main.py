@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -82,8 +83,12 @@ def listdirtree(start_path):
 async def main():
     add_logging()
 
-    # Initialize cache at startup - DON'T pre-warm automatically
-    cache = get_cache(cache_duration_minutes=30)
+    # Initialize cache at startup
+    cache = get_cache()
+
+    # Warm cache with commonly accessed data
+    logging.info("Warming cache...")
+    await cache.warm_cache()
 
     print(f"Running PRINT ...")
     logging.info(f"Running LOGGING ...")
@@ -160,7 +165,13 @@ async def main():
 
         @app.on_message(filters.text & bf)
         async def new_text(client: Client, message: Message):
+            start_time = time.perf_counter()
             logging.info(f">>>>>> {client.name}: handle_text {message.chat.id, message.text.html}")
+
+            # Check for duplicate message
+            if cache.is_duplicate_message(message.chat.id, message.id):
+                logging.info(f"Duplicate message detected, skipping: {message.chat.id}/{message.id}")
+                return
 
             lock = await get_message_lock(message.chat.id, message.id)
             async with lock:
@@ -171,7 +182,7 @@ async def main():
 
                 backup_id = await backup_single(client, message)
 
-                # LLM routing - determines destination based on content
+                # LLM routing - determines destination based on content (optimized)
                 destination = await get_destination(text, message.chat.id, cache)
                 if not destination:
                     logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
@@ -199,6 +210,10 @@ async def main():
                     reply_id,
                     text
                 ))
+
+                elapsed = (time.perf_counter() - start_time) * 1000
+                if elapsed > 100:
+                    logging.warning(f"Slow message processing: {elapsed:.2f}ms")
 
         @app.on_edited_message(filters.text & bf)
         async def edit_text(client: Client, message: Message):
@@ -231,7 +246,13 @@ async def main():
 
         @app.on_message(filters.media_group & filters.caption & mf)
         async def new_multiple(client: Client, message: Message):
+            start_time = time.perf_counter()
             logging.info(f">>>>>> {client.name}: handle_multiple {message.chat.id, message.caption.html}")
+
+            # Check for duplicate message
+            if cache.is_duplicate_message(message.chat.id, message.id):
+                logging.info(f"Duplicate message detected, skipping: {message.chat.id}/{message.id}")
+                return
 
             lock = await get_message_lock(message.chat.id, message.id)
             async with lock:
@@ -246,7 +267,7 @@ async def main():
                 if not source.is_spread:
                     return
 
-                # LLM routing - determines destination based on content
+                # LLM routing - determines destination based on content (optimized)
                 destination = await get_destination(text, message.chat.id, cache)
                 if not destination:
                     logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
@@ -276,9 +297,19 @@ async def main():
                     text
                 ))
 
+                elapsed = (time.perf_counter() - start_time) * 1000
+                if elapsed > 100:
+                    logging.warning(f"Slow media group processing: {elapsed:.2f}ms")
+
         @app.on_message(~filters.media_group & filters.caption & mf)
         async def new_single(client: Client, message: Message):
+            start_time = time.perf_counter()
             logging.info(f">>>>>> {client.name}: handle_single {message.chat.id}")
+
+            # Check for duplicate message
+            if cache.is_duplicate_message(message.chat.id, message.id):
+                logging.info(f"Duplicate message detected, skipping: {message.chat.id}/{message.id}")
+                return
 
             lock = await get_message_lock(message.chat.id, message.id)
             async with lock:
@@ -291,7 +322,7 @@ async def main():
                 if not source.is_spread:
                     return
 
-                # LLM routing - determines destination based on content
+                # LLM routing - determines destination based on content (optimized)
                 destination = await get_destination(text, message.chat.id, cache)
                 if not destination:
                     logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
@@ -321,6 +352,10 @@ async def main():
 
                 logging.info(f"----------------------------------------------------")
 
+                elapsed = (time.perf_counter() - start_time) * 1000
+                if elapsed > 100:
+                    logging.warning(f"Slow single media processing: {elapsed:.2f}ms")
+
         @app.on_edited_message(filters.caption & mf)
         async def edit_caption(client: Client, message: Message):
             logging.info(f">>>>>> {client.name}: edit_caption {message.chat.id, message.caption.html}")
@@ -348,45 +383,85 @@ async def main():
 
         @app.on_message(filters.command("refresh"))
         async def handle_refresh(client: Client, message: Message):
-            """Refresh cache for this account's sources"""
+            """Refresh all caches from database"""
             logging.info(f"Refresh command from user {message.from_user.id} on account {client.name}")
 
             try:
-                await cache.refresh_sources()
-                await message.reply_text("✅ Cache refreshed successfully for all sources")
-                logging.info(f"Cache refreshed successfully for account {client.name}")
+                await cache.refresh_all()
+
+                # Report cache statistics
+                dest_count = len(cache.get_destination_regions())
+                source_count = len(cache._sources)
+
+                await message.reply_text(
+                    f"✅ All caches refreshed successfully\n\n"
+                    f"📊 Cache stats:\n"
+                    f"• Sources: {source_count}\n"
+                    f"• Destinations: {dest_count}\n"
+                    f"• Regions: {', '.join(cache.get_destination_regions())}"
+                )
+                logging.info(f"All caches refreshed successfully for account {client.name}")
             except Exception as e:
                 await message.reply_text(f"❌ Error refreshing cache: {str(e)}")
-                logging.error(f"Error refreshing cache for account {client.name}: {e}")
+                logging.error(f"Error refreshing cache for account {client.name}: {e}", exc_info=True)
 
         @app.on_message(filters.command("join"))
         async def handle_join(client: Client, message: Message):
             args = message.text.split(" ")[1:]
+            if len(args) < 2:
+                await message.reply_text(f"❌ Usage: /join <channel> <username>")
+                return
+
             joined_chat = args[0]
             joined_by = args[1]
             logging.info(f"join to {joined_chat} by user {joined_by} via {message.from_user.id}")
 
-            if len(args) < 2:
-                await message.reply_text(f"/join {joined_chat} {joined_by} ARGS_DONT_MATCH")
-                await client.send_message(GROUP_LOG, message_thread_id=489,
-                                          text=f"ARGS_DONT_MATCH {joined_chat} {joined_by}\n\n{message.text}")
-                return
-
             try:
                 chat = await client.join_chat(joined_chat)
-                await message.reply_text(f"/join {joined_chat} {joined_by} JOIN_SUCCESS")
+
+                # Refresh sources cache to include the new channel
+                logging.info(f"Refreshing sources cache after joining {joined_chat}")
+                await cache.refresh_sources()
+
+                source_count = len(cache._sources)
+                await message.reply_text(
+                    f"✅ Joined {joined_chat}\n"
+                    f"✅ Sources cache refreshed ({source_count} sources)"
+                )
                 await client.send_message(GROUP_LOG, message_thread_id=489,
-                                          text=f"Joined {joined_chat} {joined_by}\n\n{chat}")
+                                          text=f"Joined {joined_chat} by {joined_by}\n\n{chat}")
             except Exception as e:
-                await message.reply_text(f"/join {joined_chat} {joined_by} JOIN_FAILED")
+                await message.reply_text(f"❌ Error joining {joined_chat}: {str(e)}")
                 await client.send_message(GROUP_LOG, message_thread_id=489,
-                                          text=f"ERROR Joining {joined_chat} {joined_by}\n\n{e}")
+                                          text=f"ERROR Joining {joined_chat} by {joined_by}\n\n{e}")
+                logging.error(f"Error joining chat: {e}", exc_info=True)
 
         @app.on_message(filters.command("leave"))
         async def handle_leave(client: Client, message: Message):
             logging.info(f"leave by user {message.from_user.id}")
-            chat = await client.leave_chat(message.text.split(" ")[1])
-            await message.reply_text(f"Tried to leave. Result:\n\n{chat}")
+
+            args = message.text.split(" ")[1:]
+            if len(args) < 1:
+                await message.reply_text(f"❌ Usage: /leave <channel_id>")
+                return
+
+            try:
+                chat_id = args[0]
+                chat = await client.leave_chat(chat_id)
+
+                # Refresh sources cache to remove the left channel
+                logging.info(f"Refreshing sources cache after leaving {chat_id}")
+                await cache.refresh_sources()
+
+                source_count = len(cache._sources)
+                await message.reply_text(
+                    f"✅ Left chat {chat_id}\n"
+                    f"✅ Sources cache refreshed ({source_count} sources)\n\n"
+                    f"Result: {chat}"
+                )
+            except Exception as e:
+                await message.reply_text(f"❌ Error leaving chat: {str(e)}")
+                logging.error(f"Error leaving chat: {e}", exc_info=True)
 
         apps.append(app)
 
