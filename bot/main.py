@@ -163,100 +163,20 @@ async def main():
         bf = filters.channel & filters.chat(sources) & ~filters.forwarded & filters.incoming
         mf = bf & (filters.photo | filters.video | filters.animation)
 
-        @app.on_message(filters.text & bf)
-        async def new_text(client: Client, message: Message):
-            start_time = time.perf_counter()
-            logging.info(f">>>>>> {client.name}: handle_text {message.chat.id, message.text.html}")
-
-            # Check for duplicate message
-            if cache.is_duplicate_message(message.chat.id, message.id):
-                logging.info(f"Duplicate message detected, skipping: {message.chat.id}/{message.id}")
-                return
-
-            lock = await get_message_lock(message.chat.id, message.id)
-            async with lock:
-                text = await debloat_text(message, client, cache)
-                if not text:
-                    return
-                logging.info(f"T X -single {text}")
-
-                backup_id = await backup_single(client, message)
-
-                # LLM routing - determines destination based on content (optimized)
-                destination = await get_destination(text, message.chat.id, cache)
-                if not destination:
-                    logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
-                    return
-
-                source = await cache.get_source(message.chat.id)
-                text = await format_text(text, message, source, backup_id, cache)
-
-                if message.reply_to_message_id is not None:
-                    reply_post = await get_post(message.chat.id, message.reply_to_message_id)
-                    reply_id = reply_post.message_id if reply_post else None
-                else:
-                    reply_id = None
-
-                logging.info(f"send New Text {client.name} to destination {destination}")
-                msg = await client.send_message(destination, text,
-                                                link_preview_options=LinkPreviewOptions(is_disabled=True))
-
-                await set_post(Post(
-                    msg.chat.id,
-                    msg.id,
-                    message.chat.id,
-                    message.id,
-                    backup_id,
-                    reply_id,
-                    text
-                ))
-
-                elapsed = (time.perf_counter() - start_time) * 1000
-                if elapsed > 100:
-                    logging.warning(f"Slow message processing: {elapsed:.2f}ms")
-
-        @app.on_edited_message(filters.text & bf)
-        async def edit_text(client: Client, message: Message):
-            logging.info(f">>>>>> {client.name}: edit_text {message.chat.id, message.text.html}")
-
-            if message.date < (datetime.now() - timedelta(weeks=1)):
-                return
-
-            await asyncio.sleep(60)
-
-            post = await get_post(message.chat.id, message.id)
-            if post is None:
-                logging.info(f"Edit ignored - original post not found: {message.chat.id}/{message.id}")
-                await new_text(client, message)
-                return
-
-            source = await cache.get_source(message.chat.id)
-            text = await debloat_text(message, client, cache)
-            if not text:
-                return
-
-            logging.info(f"edit text::: {post}")
-            text = await format_text(text, message, source, post.backup_id, cache)
-
-            try:
-                await client.edit_message_text(post.destination, post.message_id, text,
-                                               disable_web_page_preview=True)
-            except MessageNotModified:
-                pass
 
         @app.on_message(filters.media_group & filters.caption & mf)
         async def new_multiple(client: Client, message: Message):
             start_time = time.perf_counter()
             logging.info(f">>>>>> {client.name}: handle_multiple {message.chat.id, message.caption.html}")
 
-            # Check for duplicate message
             if cache.is_duplicate_message(message.chat.id, message.id):
                 logging.info(f"Duplicate message detected, skipping: {message.chat.id}/{message.id}")
                 return
 
             lock = await get_message_lock(message.chat.id, message.id)
             async with lock:
-                text = await debloat_text(message, client, cache)
+                # Pass is_caption=True for automatic length handling
+                text = await debloat_text(message, client, cache, is_caption=True)
                 if not text:
                     return
 
@@ -267,13 +187,17 @@ async def main():
                 if not source.is_spread:
                     return
 
-                # LLM routing - determines destination based on content (optimized)
+                # Get footer once (cached, fast)
+                footer = await cache.get_footer(source.destination)
+
+                # LLM routing - use raw text without footer for routing
                 destination = await get_destination(text, message.chat.id, cache)
                 if not destination:
                     logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
                     return
 
-                text = await format_text(text, message, source, backup_id, cache)
+                # Format with footer after routing
+                text = await format_text(text, message, source, backup_id, footer)
 
                 if message.reply_to_message_id is not None:
                     reply_post = await get_post(message.chat.id, message.reply_to_message_id)
@@ -298,22 +222,21 @@ async def main():
                 ))
 
                 elapsed = (time.perf_counter() - start_time) * 1000
-                if elapsed > 100:
-                    logging.warning(f"Slow media group processing: {elapsed:.2f}ms")
+                logging.info(f"Media group processed in {elapsed:.2f}ms")
 
         @app.on_message(~filters.media_group & filters.caption & mf)
         async def new_single(client: Client, message: Message):
             start_time = time.perf_counter()
             logging.info(f">>>>>> {client.name}: handle_single {message.chat.id}")
 
-            # Check for duplicate message
             if cache.is_duplicate_message(message.chat.id, message.id):
                 logging.info(f"Duplicate message detected, skipping: {message.chat.id}/{message.id}")
                 return
 
             lock = await get_message_lock(message.chat.id, message.id)
             async with lock:
-                text = await debloat_text(message, client, cache)
+                # Pass is_caption=True for automatic length handling
+                text = await debloat_text(message, client, cache, is_caption=True)
                 if not text:
                     return
 
@@ -322,14 +245,17 @@ async def main():
                 if not source.is_spread:
                     return
 
-                # LLM routing - determines destination based on content (optimized)
+                # Get footer once (cached, fast)
+                footer = await cache.get_footer(source.destination)
+
+                # LLM routing - use raw text without footer for routing
                 destination = await get_destination(text, message.chat.id, cache)
                 if not destination:
                     logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
                     return
 
-                logging.info(f">>>>>> {client.name}: handle_single destination={destination}")
-                text = await format_text(text, message, source, backup_id, cache)
+                # Format with footer after routing
+                text = await format_text(text, message, source, backup_id, footer)
 
                 if message.reply_to_message_id is not None:
                     reply_post = await get_post(message.chat.id, message.reply_to_message_id)
@@ -350,11 +276,64 @@ async def main():
                     text
                 ))
 
-                logging.info(f"----------------------------------------------------")
+                elapsed = (time.perf_counter() - start_time) * 1000
+                logging.info(f"Single media processed in {elapsed:.2f}ms")
+
+
+        @app.on_message(filters.text & bf)
+        async def new_text(client: Client, message: Message):
+            start_time = time.perf_counter()
+            logging.info(f">>>>>> {client.name}: handle_text {message.chat.id, message.text.html}")
+
+            if cache.is_duplicate_message(message.chat.id, message.id):
+                logging.info(f"Duplicate message detected, skipping: {message.chat.id}/{message.id}")
+                return
+
+            lock = await get_message_lock(message.chat.id, message.id)
+            async with lock:
+                # is_caption=False (default) - no length limit for text messages
+                text = await debloat_text(message, client, cache, is_caption=False)
+                if not text:
+                    return
+
+                backup_id = await backup_single(client, message)
+                source = await cache.get_source(message.chat.id)
+
+                # Get footer once (cached, fast)
+                footer = await cache.get_footer(source.destination)
+
+                # LLM routing - use raw text without footer for routing
+                destination = await get_destination(text, message.chat.id, cache)
+                if not destination:
+                    logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
+                    return
+
+                # Format with footer after routing
+                text = await format_text(text, message, source, backup_id, footer)
+
+                if message.reply_to_message_id is not None:
+                    reply_post = await get_post(message.chat.id, message.reply_to_message_id)
+                    reply_id = reply_post.message_id if reply_post else None
+                else:
+                    reply_id = None
+
+                logging.info(f"send New Text {client.name} to destination {destination}")
+                msg = await client.send_message(destination, text,
+                                                link_preview_options=LinkPreviewOptions(is_disabled=True))
+
+                await set_post(Post(
+                    msg.chat.id,
+                    msg.id,
+                    message.chat.id,
+                    message.id,
+                    backup_id,
+                    reply_id,
+                    text
+                ))
 
                 elapsed = (time.perf_counter() - start_time) * 1000
-                if elapsed > 100:
-                    logging.warning(f"Slow single media processing: {elapsed:.2f}ms")
+                logging.info(f"Text message processed in {elapsed:.2f}ms")
+
 
         @app.on_edited_message(filters.caption & mf)
         async def edit_caption(client: Client, message: Message):
@@ -368,16 +347,48 @@ async def main():
                 logging.warning(f"Edit ignored - original caption not found: {message.chat.id}/{message.id}")
                 return
 
-            text = await debloat_text(message, client, cache)
+            # Pass is_caption=True for automatic length handling
+            text = await debloat_text(message, client, cache, is_caption=True)
             if not text:
                 return
 
             source = await cache.get_source(message.chat.id)
-            text = await format_text(text, message, source, post.backup_id, cache)
+            footer = await cache.get_footer(source.destination)
+            text = await format_text(text, message, source, post.backup_id, footer)
 
             try:
                 logging.info(f"edit_caption ::::::::::::::::::::: {post}")
                 await client.edit_message_caption(post.destination, post.message_id, text)
+            except MessageNotModified:
+                pass
+
+
+        @app.on_edited_message(filters.text & bf)
+        async def edit_text(client: Client, message: Message):
+            logging.info(f">>>>>> {client.name}: edit_text {message.chat.id, message.text.html}")
+
+            if message.date < (datetime.now() - timedelta(weeks=1)):
+                return
+
+            await asyncio.sleep(60)
+
+            post = await get_post(message.chat.id, message.id)
+            if post is None:
+                logging.info(f"Edit ignored - original post not found: {message.chat.id}/{message.id}")
+                await new_text(client, message)
+                return
+
+            source = await cache.get_source(message.chat.id)
+            text = await debloat_text(message, client, cache, is_caption=False)
+            if not text:
+                return
+
+            footer = await cache.get_footer(source.destination)
+            text = await format_text(text, message, source, post.backup_id, footer)
+
+            try:
+                await client.edit_message_text(post.destination, post.message_id, text,
+                                               disable_web_page_preview=True)
             except MessageNotModified:
                 pass
 
