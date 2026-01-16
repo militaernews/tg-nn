@@ -12,11 +12,12 @@ from pyrogram.errors import MessageNotModified
 from pyrogram.types import Message, InputMediaVideo, InputMediaPhoto, LinkPreviewOptions
 
 from bot.db_cache import get_cache
+from bot.destination import get_destination
 from config import CHANNEL_BACKUP, CHANNEL_TEST, CHANNEL_UA, TESTING, PASSWORD, GROUP_LOG, CONTAINER
-from db import  get_source_ids_by_api_id, get_post, set_post, get_accounts
-from militarnyi import get_militarnyi
+from db import get_source_ids_by_api_id, get_post, set_post, get_accounts
+from extension.militarnyi import get_militarnyi
+from extension.postillon import get_postillon
 from model import Post
-from postillon import get_postillon
 from translation import translate, debloat_text, format_text
 
 processing_messages = defaultdict(asyncio.Lock)
@@ -170,8 +171,13 @@ async def main():
 
                 backup_id = await backup_single(client, message)
 
-                source = await cache.get_source(message.chat.id)
+                # LLM routing - determines destination based on content
+                destination = await get_destination(text, message.chat.id, cache)
+                if not destination:
+                    logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
+                    return
 
+                source = await cache.get_source(message.chat.id)
                 text = await format_text(text, message, source, backup_id, cache)
 
                 if message.reply_to_message_id is not None:
@@ -180,8 +186,8 @@ async def main():
                 else:
                     reply_id = None
 
-                logging.info(f"send New Text {client.name}")
-                msg = await client.send_message(source.destination, text,
+                logging.info(f"send New Text {client.name} to destination {destination}")
+                msg = await client.send_message(destination, text,
                                                 link_preview_options=LinkPreviewOptions(is_disabled=True))
 
                 await set_post(Post(
@@ -240,6 +246,12 @@ async def main():
                 if not source.is_spread:
                     return
 
+                # LLM routing - determines destination based on content
+                destination = await get_destination(text, message.chat.id, cache)
+                if not destination:
+                    logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
+                    return
+
                 text = await format_text(text, message, source, backup_id, cache)
 
                 if message.reply_to_message_id is not None:
@@ -248,7 +260,8 @@ async def main():
                 else:
                     reply_id = None
 
-                msgs = await client.copy_media_group(source.destination,
+                logging.info(f"send Media Group to destination {destination}")
+                msgs = await client.copy_media_group(destination,
                                                      from_chat_id=message.chat.id,
                                                      message_id=message.id,
                                                      captions=text)
@@ -278,7 +291,13 @@ async def main():
                 if not source.is_spread:
                     return
 
-                logging.info(f">>>>>> {client.name}: handle_single {source, message.chat.id, backup_id}")
+                # LLM routing - determines destination based on content
+                destination = await get_destination(text, message.chat.id, cache)
+                if not destination:
+                    logging.warning(f"No destination determined for message {message.chat.id}/{message.id}")
+                    return
+
+                logging.info(f">>>>>> {client.name}: handle_single destination={destination}")
                 text = await format_text(text, message, source, backup_id, cache)
 
                 if message.reply_to_message_id is not None:
@@ -287,8 +306,8 @@ async def main():
                 else:
                     reply_id = None
 
-                logging.info(f"---- new single {client.name}----- {source}")
-                msg = await message.copy(source.destination, caption=text)
+                logging.info(f"---- new single {client.name} to {destination}")
+                msg = await message.copy(destination, caption=text)
 
                 await set_post(Post(
                     msg.chat.id,
