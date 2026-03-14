@@ -23,6 +23,7 @@ class Source:
 class SourceDisplay:
     display_name: str
     is_spread: bool = True
+    is_active: bool = False
     bias: Optional[str] = None
     invite: Optional[str] = None
     username: Optional[str] = None

@@ -140,18 +140,26 @@ async def format_text(text: str, message: Message, source: SourceDisplay, backup
 
 
 async def debloat_message(message: Message, client: Client, cache: DBCache) -> bool | str:
+    # Use caption if available, otherwise text
     if message.caption is not None:
         limit = 20
         text = message.caption.html
-    else:
+    elif message.text is not None:
         text = message.text.html
         limit = 30
+    else:
+        # No text or caption (e.g. just a photo without caption)
+        return False
 
     if len(re.findall(BLACKLIST, text)) != 0:
         return False
 
+    # Identify the original source chat ID for pattern matching
+    source_chat_id = message.forward_from_chat.id if message.forward_from_chat else message.chat.id
+    source_username = message.forward_from_chat.username if message.forward_from_chat else message.chat.username
+
     # Use cached patterns instead of direct db call
-    patterns = await cache.get_patterns(message.chat.id)
+    patterns = await cache.get_patterns(source_chat_id)
 
     text = PATTERN_HTMLTAG.sub("", text).rstrip()
 
@@ -165,6 +173,7 @@ async def debloat_message(message: Message, client: Client, cache: DBCache) -> b
         logging.info(pattern)
 
         if len(result) == 0:
+            # If it's already in backup, forwarding again might be redundant but okay for logging
             await message.forward(GROUP_PATTERN)
             await client.send_message(GROUP_PATTERN, text, parse_mode=ParseMode.DISABLED)
 
@@ -173,7 +182,8 @@ async def debloat_message(message: Message, client: Client, cache: DBCache) -> b
 
         text = re.sub(pattern, "", text)
 
-    text = re.sub(f"@{message.chat.username}$", "", text, flags=re.IGNORECASE).rstrip()
+    if source_username:
+        text = re.sub(f"@{source_username}$", "", text, flags=re.IGNORECASE).rstrip()
     text = PATTERN_HASHTAG.sub("", text, ).rstrip()
     logging.info(f"<<<<< hashtag :  {text}")
 
