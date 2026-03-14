@@ -1,5 +1,5 @@
 """
-Fast LLM-based regional routing using OpenRouter API.
+Fast LLM-based regional routing using FREE OpenRouter models.
 Optimized with connection pooling, pre-computed mappings, and fallback models.
 """
 import json
@@ -13,14 +13,16 @@ from httpx import AsyncClient, Limits, HTTPStatusError
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Models to try in order of preference (cost/reliability)
-# 1. Google Gemini 2.0 Flash Lite (Very low cost, high speed)
-# 2. Google Gemini 2.0 Flash (Reliable, fast)
-# 3. Meta Llama 3.3 70B (Fallback)
-MODELS = [
-    "google/gemini-2.0-flash-lite-001",
-    "google/gemini-2.0-flash-001",
-    "meta-llama/llama-3.3-70b-instruct"
+# FREE Models to try in order of preference
+# 1. Google Gemini 2.0 Flash Lite (Experimental/Free tier)
+# 2. Google Gemini 2.0 Flash (Experimental/Free tier)
+# 3. Meta Llama 3.1 8B (Free)
+# 4. Mistral 7B (Free)
+FREE_MODELS = [
+    "google/gemini-2.0-flash-lite-preview-02-05:free",
+    "google/gemini-2.0-flash-exp:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "mistralai/mistral-7b-instruct:free"
 ]
 
 # Reuse HTTP client with connection pooling
@@ -104,13 +106,13 @@ Text: {text[:2000]}
 Return ONLY a JSON object: {{"region": "region_name", "confidence": 0.0-1.0}}"""
 
         content = None
-        for model in MODELS:
+        for model in FREE_MODELS:
             content = await call_llm(model, prompt)
             if content:
                 break
         
         if not content:
-            logging.error("All LLM models failed to respond")
+            logging.error("All FREE LLM models failed to respond")
             return default_dest
 
         # Clean and parse JSON
@@ -153,8 +155,6 @@ async def get_destination(text: str, source_id: int, cache) -> Optional[int]:
     if not source_default:
         logging.warning(f"No destination configured for source {source_id}")
         # If no default is set, we still try to route, but might return None
-        # However, the current logic expects a default. 
-        # Let's use a fallback if possible or return None.
         pass
 
     destination = await route_message(text, source_default, cache)
