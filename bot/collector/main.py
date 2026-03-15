@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import List, Final
+from typing import List, Final, Optional
 import os
 
 from pyrogram import Client, filters, compose
@@ -9,8 +9,9 @@ from pyrogram.enums import ParseMode
 from pyrogram.types import Message
 
 from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER
-from bot.db import get_accounts, get_source_ids_by_api_id
+from bot.db import get_accounts, get_source_ids_by_api_id, set_post, get_post
 from bot.db_cache import get_cache
+from bot.model import Post
 
 def add_logging():
     level = logging.INFO
@@ -27,14 +28,11 @@ def add_logging():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
-async def backup_message(client: Client, message: Message) -> int:
+async def backup_message(client: Client, message: Message) -> Optional[int]:
     """Forward message to backup channel and return the backup message ID."""
     try:
         # Forwarding handles media groups automatically if we pass the message ID
-        # But for simplicity and reliability in the collector, we forward each message.
-        # The processor will handle grouping if needed.
         msg_backup = await client.forward_messages(CHANNEL_BACKUP, message.chat.id, message.id)
-        # If it was a media group, forward_messages returns a list
         backup_id = msg_backup[0].id if isinstance(msg_backup, list) else msg_backup.id
         logging.info(f"Forwarded {message.chat.id}/{message.id} to backup {CHANNEL_BACKUP}/{backup_id}")
         return backup_id
@@ -78,9 +76,32 @@ async def main():
             source = await cache.get_source(message.chat.id)
             if not source or not source.is_active:
                 return
-                
-            # Simply forward to backup
-            await backup_message(client, message)
+            
+            # Forward to backup
+            backup_id = await backup_message(client, message)
+            if not backup_id:
+                return
+
+            # Handle reply logic
+            reply_id = None
+            if message.reply_to_message_id:
+                # Check if the replied-to message was already processed/backed up
+                reply_post = await get_post(message.chat.id, message.reply_to_message_id)
+                if reply_post:
+                    reply_id = reply_post.backup_id
+            
+            # Record the backup in the database
+            # Note: We use destination=CHANNEL_BACKUP and message_id=backup_id
+            # This allows the processor to find the backup_id for replies.
+            await set_post(Post(
+                destination=CHANNEL_BACKUP,
+                message_id=backup_id,
+                source_channel_id=message.chat.id,
+                source_message_id=message.id,
+                backup_id=backup_id,
+                reply_id=reply_id,
+                message_text=message.text or message.caption
+            ))
 
         apps.append(app)
         

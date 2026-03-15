@@ -13,7 +13,12 @@ from constant import (PLACEHOLDER, PATTERN_REPLACEMENT, PATTERN_HTMLTAG, PATTERN
                       emoji_pattern, PATTERN_FITZPATRICK, REPLACEMENTS, PATTERN_PARAGRAPH)
 from model import SourceDisplay
 
-translator = deepl.Translator(DEEPL)
+translator = None
+if DEEPL:
+    try:
+        translator = deepl.Translator(DEEPL)
+    except Exception as e:
+        logging.error(f"Failed to initialize DeepL: {e}")
 
 BLACKLIST = [
     "Нічний чат, правила стандартні:",
@@ -88,11 +93,14 @@ def translate(text: str, is_caption: bool = False) -> str:
         text = truncate_text(text, TELEGRAM_CAPTION_LIMIT - FOOTER_RESERVE)
 
     try:
-        translated_text = translator.translate_text(text,
-                                                    target_lang="de",
-                                                    split_sentences=SplitSentences.ALL,
-                                                    tag_handling="html",
-                                                    ).text
+        if translator:
+            translated_text = translator.translate_text(text,
+                                                        target_lang="de",
+                                                        split_sentences=SplitSentences.ALL,
+                                                        tag_handling="html",
+                                                        ).text
+        else:
+            raise Exception("DeepL translator not initialized")
 
     except QuotaExceededException:
         logging.info("--- Quota exceeded ---")
@@ -143,9 +151,9 @@ async def debloat_message(message: Message, client: Client, cache: DBCache) -> b
     # Use caption if available, otherwise text
     if message.caption is not None:
         limit = 20
-        text = message.caption.html
+        text = getattr(message.caption, 'html', message.caption)
     elif message.text is not None:
-        text = message.text.html
+        text = getattr(message.text, 'html', message.text)
         limit = 30
     else:
         # No text or caption (e.g. just a photo without caption)
