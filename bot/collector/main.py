@@ -8,8 +8,8 @@ from pyrogram import Client, filters, compose
 from pyrogram.enums import ParseMode
 from pyrogram.types import Message
 
-from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER, POLL_DESTINATION
-from bot.db import get_accounts, get_source_ids_by_api_id, set_post, get_post, get_source
+from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER
+from bot.db import get_accounts, get_source_ids_by_api_id, set_post, get_post
 from bot.db_cache import get_cache
 from bot.model import Post
 
@@ -69,51 +69,12 @@ async def main():
         
         # Filter for incoming messages from active sources
         source_filter = filters.chat(sources) & ~filters.forwarded & filters.incoming
-        poll_filter = filters.chat(sources) & filters.poll & filters.incoming
         
-        @app.on_message(poll_filter)
-        async def handle_poll(client: Client, message: Message):
-            if not POLL_DESTINATION:
-                return
-            
-            source = await cache.get_source(message.chat.id)
-            if not source or not source.is_active:
-                return
-
-            try:
-                # Forward poll
-                await message.forward(POLL_DESTINATION)
-                
-                # Create source detail message inspired by the posting pipeline
-                detail_text = f"Poll von: <a href='{message.link}'>{source.display_name}"
-                if source.bias:
-                    detail_text += f" {source.bias}"
-                detail_text += "</a>"
-                
-                if source.username is None and source.invite is not None:
-                    detail_text += f" | <a href='https://t.me/+{source.invite}'>🔗</a>"
-                
-                if source.detail_id is not None:
-                    detail_text += f" | <a href='https://t.me/nn_sources/{source.detail_id}'>ℹ️</a>"
-                
-                await client.send_message(
-                    POLL_DESTINATION,
-                    detail_text,
-                    disable_web_page_preview=True
-                )
-                logging.info(f"Forwarded poll from {message.chat.id} to {POLL_DESTINATION}")
-            except Exception as e:
-                logging.error(f"Failed to forward poll from {message.chat.id}: {e}")
-
         @app.on_message(source_filter)
         async def handle_incoming(client: Client, message: Message):
             # Check if source is active in cache
             source = await cache.get_source(message.chat.id)
             if not source or not source.is_active:
-                return
-            
-            # Skip polls in the main handler as they are handled separately
-            if message.poll:
                 return
             
             # Forward to backup

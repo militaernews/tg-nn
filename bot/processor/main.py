@@ -12,8 +12,8 @@ from pyrogram.enums import ParseMode
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import Message, InputMediaVideo, InputMediaPhoto
 
-from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER, GROUP_LOG, CHANNEL_UA
-from bot.db import get_accounts, get_post, set_post
+from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER, GROUP_LOG, CHANNEL_UA, POLL_DESTINATION
+from bot.db import get_accounts, get_post, set_post, get_source
 from bot.db_cache import get_cache
 from bot.destination import get_destination
 from bot.model import Post
@@ -83,9 +83,72 @@ async def handle_extensions(client: Client, message: Message, cache):
             
     return False
 
+async def handle_poll_logic(client: Client, message: Message, cache):
+    """Handle poll forwarding from backup to POLL_DESTINATION."""
+    if not POLL_DESTINATION or not message.poll:
+        return False
+
+    if not message.forward_from_chat:
+        return False
+
+    source_chat_id = message.forward_from_chat.id
+    source_msg_id = message.forward_from_message_id
+
+    # Check if already posted
+    existing_post = await get_post(source_chat_id, source_msg_id)
+    if existing_post and existing_post.destination == POLL_DESTINATION:
+        return True
+
+    source = await cache.get_source(source_chat_id)
+    if not source or not source.is_active:
+        return False
+
+    try:
+        # Forward poll
+        await message.forward(POLL_DESTINATION)
+        
+        # Create source detail message
+        detail_text = f"Poll von: <a href='{message.link}'>{source.display_name}"
+        if source.bias:
+            detail_text += f" {source.bias}"
+        detail_text += "</a>"
+        
+        if source.username is None and source.invite is not None:
+            detail_text += f" | <a href='https://t.me/+{source.invite}'>🔗</a>"
+        
+        if source.detail_id is not None:
+            detail_text += f" | <a href='https://t.me/nn_sources/{source.detail_id}'>ℹ️</a>"
+        
+        new_msg = await client.send_message(
+            POLL_DESTINATION,
+            detail_text,
+            disable_web_page_preview=True
+        )
+
+        # Record in database
+        await set_post(Post(
+            destination=POLL_DESTINATION,
+            message_id=new_msg.id,
+            source_channel_id=source_chat_id,
+            source_message_id=source_msg_id,
+            backup_id=message.id,
+            message_text=detail_text
+        ))
+        
+        logging.info(f"Forwarded poll from {source_chat_id} via backup to {POLL_DESTINATION}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to forward poll from backup: {e}")
+        return False
+
 async def process_message_logic(client: Client, message: Message, cache, is_media_group=False):
     """Core processing logic for a single message or the first message of a media group."""
     start_time = time.perf_counter()
+
+    # 0. Handle Polls
+    if message.poll:
+        if await handle_poll_logic(client, message, cache):
+            return None
     
     # 1. Identify original source from forward info
     if not message.forward_from_chat:
