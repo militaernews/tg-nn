@@ -23,6 +23,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 DATABASE_URL_TEST: Final[str] = os.getenv("DATABASE_URL_TEST")
 PASSWORD = os.getenv("PASSWORD")
 OPENROUTER_API_KEY=os.getenv("OPENROUTER_API_KEY")
+POLL_DESTINATION = os.getenv("POLL_DESTINATION")
 
 TESTING = False
 LOG_FILENAME = rf"./logs/{datetime.now().strftime('%Y-%m-%d/%H-%M-%S')}.log"
