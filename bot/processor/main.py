@@ -12,7 +12,7 @@ from pyrogram.enums import ParseMode
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import Message, InputMediaVideo, InputMediaPhoto
 
-from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER, GROUP_LOG, CHANNEL_UA, POLL_DESTINATION
+from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER, GROUP_LOG, CHANNEL_UA, GIVEAWAY_DESTINATION
 from bot.db import get_accounts, get_post, set_post, get_source
 from bot.db_cache import get_cache
 from bot.destination import get_destination
@@ -83,9 +83,10 @@ async def handle_extensions(client: Client, message: Message, cache):
             
     return False
 
-async def handle_poll_logic(client: Client, message: Message, cache):
-    """Handle poll forwarding from backup to POLL_DESTINATION."""
-    if not POLL_DESTINATION or not message.poll:
+async def handle_giveaway_logic(client: Client, message: Message, cache):
+    """Handle giveaway forwarding from backup to GIVEAWAY_DESTINATION."""
+    is_giveaway = bool(message.giveaway or message.giveaway_result or message.giveaway_winners)
+    if not GIVEAWAY_DESTINATION or not is_giveaway:
         return False
 
     if not message.forward_from_chat:
@@ -96,7 +97,7 @@ async def handle_poll_logic(client: Client, message: Message, cache):
 
     # Check if already posted
     existing_post = await get_post(source_chat_id, source_msg_id)
-    if existing_post and existing_post.destination == POLL_DESTINATION:
+    if existing_post and existing_post.destination == GIVEAWAY_DESTINATION:
         return True
 
     source = await cache.get_source(source_chat_id)
@@ -104,11 +105,11 @@ async def handle_poll_logic(client: Client, message: Message, cache):
         return False
 
     try:
-        # Forward poll
-        await message.forward(POLL_DESTINATION)
+        # Forward giveaway
+        await message.forward(GIVEAWAY_DESTINATION)
         
         # Create source detail message
-        detail_text = f"Poll von: <a href='{message.link}'>{source.display_name}"
+        detail_text = f"Giveaway von: <a href='{message.link}'>{source.display_name}"
         if source.bias:
             detail_text += f" {source.bias}"
         detail_text += "</a>"
@@ -120,14 +121,14 @@ async def handle_poll_logic(client: Client, message: Message, cache):
             detail_text += f" | <a href='https://t.me/nn_sources/{source.detail_id}'>ℹ️</a>"
         
         new_msg = await client.send_message(
-            POLL_DESTINATION,
+            GIVEAWAY_DESTINATION,
             detail_text,
             disable_web_page_preview=True
         )
 
         # Record in database
         await set_post(Post(
-            destination=POLL_DESTINATION,
+            destination=GIVEAWAY_DESTINATION,
             message_id=new_msg.id,
             source_channel_id=source_chat_id,
             source_message_id=source_msg_id,
@@ -135,19 +136,20 @@ async def handle_poll_logic(client: Client, message: Message, cache):
             message_text=detail_text
         ))
         
-        logging.info(f"Forwarded poll from {source_chat_id} via backup to {POLL_DESTINATION}")
+        logging.info(f"Forwarded giveaway from {source_chat_id} via backup to {GIVEAWAY_DESTINATION}")
         return True
     except Exception as e:
-        logging.error(f"Failed to forward poll from backup: {e}")
+        logging.error(f"Failed to forward giveaway from backup: {e}")
         return False
 
 async def process_message_logic(client: Client, message: Message, cache, is_media_group=False):
     """Core processing logic for a single message or the first message of a media group."""
     start_time = time.perf_counter()
 
-    # 0. Handle Polls
-    if message.poll:
-        if await handle_poll_logic(client, message, cache):
+    # 0. Handle Giveaways
+    is_giveaway = bool(message.giveaway or message.giveaway_result or message.giveaway_winners)
+    if is_giveaway:
+        if await handle_giveaway_logic(client, message, cache):
             return None
     
     # 1. Identify original source from forward info
