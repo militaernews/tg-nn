@@ -1,14 +1,15 @@
 import logging
 
 import deepl
+import httpx
 import regex as re
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 from deepl import QuotaExceededException, SplitSentences
 from pyrogram import Client
 from pyrogram.enums import ParseMode
 from pyrogram.types import Message
 
-from config import DEEPL, GROUP_PATTERN
+from config import DEEPL, GROUP_PATTERN, OPENROUTER_API_KEY
 from constant import (PLACEHOLDER, PATTERN_REPLACEMENT, PATTERN_HTMLTAG, PATTERN_HASHTAG, emoji_space_pattern,
                       emoji_pattern, PATTERN_FITZPATRICK, REPLACEMENTS, PATTERN_PARAGRAPH)
 from model import SourceDisplay
@@ -19,6 +20,67 @@ if DEEPL:
         translator = deepl.Translator(DEEPL)
     except Exception as e:
         logging.error(f"Failed to initialize DeepL: {e}")
+
+# Free web-scrape translation endpoints (Google, MyMemory) occasionally return their
+# own error page as if it were a translation instead of raising - detect that so we
+# cascade to the next fallback rather than posting garbage.
+TRANSLATION_ERROR_MARKERS = ("Error 500", "That's an error", "That’s an error")
+
+
+def _looks_like_translation_error(text: str | None) -> bool:
+    return not text or any(marker in text for marker in TRANSLATION_ERROR_MARKERS)
+
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Free OpenRouter models, tried in order, used only as a last-resort translation
+# fallback once DeepL and the free web-scrape translators have all failed.
+LLM_TRANSLATE_MODELS = [
+    "google/gemini-2.0-flash-lite-preview-02-05:free",
+    "google/gemini-2.0-flash-exp:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "mistralai/mistral-7b-instruct:free",
+]
+
+
+def _translate_via_llm(text: str) -> str:
+    if not OPENROUTER_API_KEY:
+        raise Exception("OPENROUTER_API_KEY not configured")
+
+    prompt = (
+        "Translate the following text to German. Preserve any HTML tags exactly as-is "
+        "and reply with ONLY the translation, no comments or explanations.\n\n"
+        f"{text}"
+    )
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/militaernews/tg-nn",
+        "X-Title": "TG-NN Translation Fallback",
+    }
+
+    last_error = None
+    for model in LLM_TRANSLATE_MODELS:
+        try:
+            response = httpx.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2,
+                },
+                timeout=20.0,
+            )
+            response.raise_for_status()
+            translated = response.json()["choices"][0]["message"]["content"].strip()
+            if translated:
+                return translated
+        except Exception as e:
+            last_error = e
+            logging.warning(f"LLM translation via {model} failed: {e}")
+
+    raise Exception(f"All LLM translation models failed: {last_error}")
+
 
 BLACKLIST = [
     "Нічний чат, правила стандартні:",
@@ -92,6 +154,8 @@ def translate(text: str, is_caption: bool = False) -> str:
             f"Pre-truncating caption before translation: {len(text)} -> {TELEGRAM_CAPTION_LIMIT - FOOTER_RESERVE}")
         text = truncate_text(text, TELEGRAM_CAPTION_LIMIT - FOOTER_RESERVE)
 
+    translated_text = None
+
     try:
         if translator:
             translated_text = translator.translate_text(text,
@@ -101,13 +165,31 @@ def translate(text: str, is_caption: bool = False) -> str:
                                                         ).text
         else:
             raise Exception("DeepL translator not initialized")
-
     except QuotaExceededException:
         logging.info("--- Quota exceeded ---")
-        translated_text = GoogleTranslator(source='auto', target="de").translate(text=text)
     except Exception as e:
         logging.error(f"--- other error translating --- {e}")
-        translated_text = GoogleTranslator(source='auto', target="de").translate(text=text)
+
+    if _looks_like_translation_error(translated_text):
+        try:
+            translated_text = GoogleTranslator(source='auto', target="de").translate(text=text)
+        except Exception as e:
+            logging.warning(f"--- Google translation failed --- {e}")
+            translated_text = None
+
+    if _looks_like_translation_error(translated_text):
+        try:
+            translated_text = MyMemoryTranslator(source='auto', target="de").translate(text)
+        except Exception as e:
+            logging.warning(f"--- MyMemory translation failed --- {e}")
+            translated_text = None
+
+    if _looks_like_translation_error(translated_text):
+        try:
+            translated_text = _translate_via_llm(text)
+        except Exception as e:
+            logging.error(f"--- LLM translation failed, all providers exhausted --- {e}")
+            translated_text = text
 
     translated_text = chunk_paragraphs(translated_text)
 
