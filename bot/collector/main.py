@@ -73,15 +73,7 @@ async def main():
 
         logging.info(f"{a.name} monitoring {len(sources)} sources")
 
-        # Giveaways are often reposted/forwarded by a source channel from a
-        # partner channel (cross-promotion). Let those through even though
-        # forwarded messages are otherwise skipped, so every giveaway still
-        # reaches GIVEAWAY_DESTINATION downstream.
-        is_giveaway_filter = filters.create(
-            lambda _, __, m: bool(m.giveaway or m.giveaway_result or m.giveaway_winners)
-        )
-        source_filter = (filters.chat(sources) & filters.incoming &
-                        (~filters.forwarded | is_giveaway_filter))
+        source_filter = filters.chat(sources) & ~filters.forwarded & filters.incoming
 
         @app.on_message(source_filter)
         async def handle_incoming(client: Client, message: Message):
