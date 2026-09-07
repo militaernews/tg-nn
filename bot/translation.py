@@ -9,10 +9,10 @@ from pyrogram import Client
 from pyrogram.enums import ParseMode
 from pyrogram.types import Message
 
-from config import DEEPL, GROUP_PATTERN, OPENROUTER_API_KEY
-from constant import (PLACEHOLDER, PATTERN_REPLACEMENT, PATTERN_HTMLTAG, PATTERN_HASHTAG, emoji_space_pattern,
+from bot.config import DEEPL, GROUP_PATTERN, OPENROUTER_API_KEY
+from bot.constant import (PLACEHOLDER, PATTERN_REPLACEMENT, PATTERN_HTMLTAG, PATTERN_HASHTAG, emoji_space_pattern,
                       emoji_pattern, PATTERN_FITZPATRICK, REPLACEMENTS, PATTERN_PARAGRAPH)
-from model import SourceDisplay
+from bot.model import SourceDisplay
 
 translator = None
 if DEEPL:

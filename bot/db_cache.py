@@ -87,6 +87,10 @@ class DBCache:
             f"{len(self._sources)} sources, {len(self._destinations)} destinations"
         )
 
+    async def warm_cache(self) -> None:
+        """Populate the cache once at startup, before the DB pool is closed."""
+        await self._ensure_initialized()
+
     # ── Public read API ───────────────────────────────────────────────────────
 
     async def get_source(self, channel_id: int) -> SourceDisplay:
