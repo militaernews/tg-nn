@@ -11,6 +11,7 @@ from pyrogram.types import Message
 from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER
 from bot.db import get_accounts, get_source_ids_by_api_id, set_post, get_post, DBPool
 from bot.db_cache import get_cache
+from bot.error_logger import log_error
 from bot.model import Post
 
 
@@ -41,6 +42,7 @@ async def backup_message(client: Client, message: Message) -> Optional[int]:
         return backup_id
     except Exception as e:
         logging.error(f"Failed to forward {message.chat.id}/{message.id}: {e}")
+        await log_error(client, e, f"[collector] Failed to forward {message.chat.id}/{message.id}")
         return None
 
 
@@ -77,33 +79,39 @@ async def main():
 
         @app.on_message(source_filter)
         async def handle_incoming(client: Client, message: Message):
-            # Cache check — no DB
-            source = await cache.get_source(message.chat.id)
-            if not source or not source.is_active:
-                return
+            try:
+                # Cache check — no DB
+                source = await cache.get_source(message.chat.id)
+                if not source or not source.is_active:
+                    return
 
-            # Forward to backup (Telegram API — no DB)
-            backup_id = await backup_message(client, message)
-            if not backup_id:
-                return
+                # Forward to backup (Telegram API — no DB)
+                backup_id = await backup_message(client, message)
+                if not backup_id:
+                    return
 
-            # Reply threading (DB call — connection opens, query runs, closes)
-            reply_id = None
-            if message.reply_to_message_id:
-                reply_post = await get_post(message.chat.id, message.reply_to_message_id)
-                if reply_post:
-                    reply_id = reply_post.backup_id
+                # Reply threading (DB call — connection opens, query runs, closes)
+                reply_id = None
+                if message.reply_to_message_id:
+                    reply_post = await get_post(message.chat.id, message.reply_to_message_id)
+                    if reply_post:
+                        reply_id = reply_post.backup_id
 
-            # Record (DB call — connection opens, insert runs, closes)
-            await set_post(Post(
-                destination=CHANNEL_BACKUP,
-                message_id=backup_id,
-                source_channel_id=message.chat.id,
-                source_message_id=message.id,
-                backup_id=backup_id,
-                reply_id=reply_id,
-                message_text=message.text or message.caption,
-            ))
+                # Record (DB call — connection opens, insert runs, closes)
+                await set_post(Post(
+                    destination=CHANNEL_BACKUP,
+                    message_id=backup_id,
+                    source_channel_id=message.chat.id,
+                    source_message_id=message.id,
+                    backup_id=backup_id,
+                    reply_id=reply_id,
+                    message_text=message.text or message.caption,
+                ))
+            except Exception as e:
+                # Pyrogram has no application-wide error hook (unlike PTB's
+                # add_error_handler) - catch here so nothing goes unreported.
+                logging.error(f"Unhandled error in handle_incoming for {message.chat.id}/{message.id}: {e}")
+                await log_error(client, e, f"[collector] handle_incoming {message.chat.id}/{message.id}")
 
         apps.append(app)
 

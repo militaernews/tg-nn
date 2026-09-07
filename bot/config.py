@@ -16,6 +16,11 @@ GROUP_SOURCE = 1723195485  # requires pattern topic
 GROUP_PATTERN = -1001895734902
 GROUP_LOG = -1001723195485
 
+# Shared error-log group/topic used by all ptb-* bots (ptb-mnchat etc.) -
+# distinct from GROUP_LOG above, which is tg-nn's own group for other logging.
+LOG_GROUP_ID = int(os.getenv("LOG_GROUP_ID", -1001338514957))
+THREAD_ID = int(os.getenv("THREAD_ID", 488))  # tg-nn topic
+
 CHANNEL_UA = -1001839268196
 
 DEEPL = os.getenv("DEEPL")

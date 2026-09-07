@@ -15,6 +15,7 @@ from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER, GROUP_LOG, CHANNEL_U
 from bot.db import get_accounts, get_post, set_post, DBPool
 from bot.db_cache import get_cache
 from bot.destination import get_destination
+from bot.error_logger import log_error
 from bot.model import Post
 from bot.translation import debloat_text, format_text, translate
 from bot.extension.militarnyi import get_militarnyi
@@ -130,6 +131,7 @@ async def handle_giveaway_logic(client: Client, message: Message, cache) -> bool
         return True
     except Exception as e:
         logging.error(f"Failed to forward giveaway: {e}")
+        await log_error(client, e, f"[processor] Failed to forward giveaway {source_chat_id}/{source_msg_id}")
         return False
 
 
@@ -239,6 +241,7 @@ async def process_message_logic(client: Client, message: Message, cache,
 
     except Exception as e:
         logging.error(f"Failed to post to {destination}: {e}")
+        await log_error(client, e, f"[processor] Failed to post {source_chat_id}/{source_msg_id} to {destination}")
 
 
 async def handle_backup_message(client: Client, message: Message, cache) -> None:
@@ -287,7 +290,13 @@ async def main():
 
     @app.on_message(filters.chat(CHANNEL_BACKUP) & filters.incoming)
     async def on_backup_msg(client: Client, message: Message):
-        await handle_backup_message(client, message, cache)
+        try:
+            await handle_backup_message(client, message, cache)
+        except Exception as e:
+            # Pyrogram has no application-wide error hook (unlike PTB's
+            # add_error_handler) - catch here so nothing goes unreported.
+            logging.error(f"Unhandled error in on_backup_msg for message {message.id}: {e}")
+            await log_error(client, e, f"[processor] on_backup_msg {message.id}")
 
     await app.start()
     logging.info("Processor started, idling...")
