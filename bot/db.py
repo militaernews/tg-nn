@@ -151,11 +151,14 @@ async def set_sources(sources: Dict[int, Dict[str, Union[str, int]]], conn: Conn
 
 @db
 async def set_post(post: Post, conn: Connection) -> None:
-    """Insert a post, or promote the existing row (e.g. the collector's
-    CHANNEL_BACKUP placeholder) to its real destination if one already
-    exists for this (source_channel_id, source_message_id).
+    """Insert a post. The collector records a pending row per source message
+    (destination=NULL) when it backs it up; the processor later fills in the
+    real destination exactly once via this same call. A post that already
+    has a real destination is never overwritten here - that would mean the
+    same source message got posted twice, which is a bug to surface, not
+    silently absorb.
     """
-    await conn.execute(
+    result = await conn.execute(
         """INSERT INTO posts
            (destination, message_id, source_channel_id, source_message_id,
             backup_id, reply_id, message_text, file_id)
@@ -166,11 +169,17 @@ async def set_post(post: Post, conn: Connection) -> None:
                backup_id = EXCLUDED.backup_id,
                reply_id = EXCLUDED.reply_id,
                message_text = EXCLUDED.message_text,
-               file_id = EXCLUDED.file_id;""",
+               file_id = EXCLUDED.file_id
+           WHERE posts.destination IS NULL;""",
         post.destination, post.message_id, post.source_channel_id,
         post.source_message_id, post.backup_id, post.reply_id,
         post.message_text, post.file_id,
     )
+    if result == "INSERT 0 0" and post.destination is not None:
+        raise ValueError(
+            f"Post {post.source_channel_id}/{post.source_message_id} already has a "
+            f"destination - refusing to overwrite with {post.destination}"
+        )
 
 
 @db

@@ -98,8 +98,10 @@ async def main():
                         reply_id = reply_post.backup_id
 
                 # Record (DB call — connection opens, insert runs, closes)
+                # destination=None marks this as backed up but not yet routed
+                # to a real destination; the processor fills that in later.
                 await set_post(Post(
-                    destination=CHANNEL_BACKUP,
+                    destination=None,
                     message_id=backup_id,
                     source_channel_id=message.chat.id,
                     source_message_id=message.id,

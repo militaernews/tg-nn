@@ -42,7 +42,7 @@ class Account:
 
 @dataclass
 class Post:
-    destination: int
+    destination: Optional[int]
     message_id: int
     source_channel_id: int
     source_message_id: int

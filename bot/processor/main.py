@@ -161,7 +161,7 @@ async def process_message_logic(client: Client, message: Message, cache,
 
     # 3. Already posted? (DB call — connection acquired + released immediately)
     existing_post = await get_post(source_chat_id, source_msg_id)
-    if existing_post and existing_post.destination != CHANNEL_BACKUP:
+    if existing_post and existing_post.destination is not None:
         logging.info(f"{source_chat_id}/{source_msg_id} already posted, skipping")
         return
 
