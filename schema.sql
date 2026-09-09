@@ -40,7 +40,7 @@ CREATE TABLE bloats
 
 CREATE TABLE posts
   (
-     destination       BIGINT NOT NULL,
+     destination       BIGINT,
      message_id        INT NOT NULL,
      source_channel_id BIGINT NOT NULL,
      source_message_id INT NOT NULL,
