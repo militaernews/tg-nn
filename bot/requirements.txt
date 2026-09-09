@@ -1,16 +1,16 @@
-kurigram==2.2.22
+kurigram==2.2.25
 #pytgcrypto @ git+https://github.com/TelegramPlayGround/pyrogram-tgcrypto
 #pip install -e git+https://github.com/TelegramPlayGround/pyrogram-tgcrypto.git#egg=pytgcrypto
 
 pyyaml==6.0.3
-deepl==1.30.0
+deepl==1.32.0
 deep-translator==1.11.4
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 asyncpg==0.31.0
 
-beautifulsoup4==4.14.3
+beautifulsoup4==4.15.0
 httpx==0.28.1
-Pillow==12.2.0
-regex==2026.4.4
+Pillow==12.3.0
+regex==2026.9.3
 
 pytube==15.0.0
