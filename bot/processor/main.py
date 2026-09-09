@@ -89,7 +89,7 @@ async def handle_giveaway_logic(client: Client, message: Message, cache) -> bool
     """Handle giveaway forwarding from backup to GIVEAWAY_DESTINATION."""
     if not GIVEAWAY_DESTINATION:
         return False
-    if not (message.giveaway or message.giveaway_result or message.giveaway_winners):
+    if not (message.giveaway or message.giveaway_completed or message.giveaway_winners):
         return False
     if not message.forward_from_chat:
         return False
@@ -140,7 +140,7 @@ async def process_message_logic(client: Client, message: Message, cache,
     start_time = time.perf_counter()
 
     # 0. Giveaways
-    if message.giveaway or message.giveaway_result or message.giveaway_winners:
+    if message.giveaway or message.giveaway_completed or message.giveaway_winners:
         if await handle_giveaway_logic(client, message, cache):
             return
 
