@@ -151,11 +151,22 @@ async def set_sources(sources: Dict[int, Dict[str, Union[str, int]]], conn: Conn
 
 @db
 async def set_post(post: Post, conn: Connection) -> None:
+    """Insert a post, or promote the existing row (e.g. the collector's
+    CHANNEL_BACKUP placeholder) to its real destination if one already
+    exists for this (source_channel_id, source_message_id).
+    """
     await conn.execute(
         """INSERT INTO posts
            (destination, message_id, source_channel_id, source_message_id,
             backup_id, reply_id, message_text, file_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8);""",
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (source_channel_id, source_message_id) DO UPDATE SET
+               destination = EXCLUDED.destination,
+               message_id = EXCLUDED.message_id,
+               backup_id = EXCLUDED.backup_id,
+               reply_id = EXCLUDED.reply_id,
+               message_text = EXCLUDED.message_text,
+               file_id = EXCLUDED.file_id;""",
         post.destination, post.message_id, post.source_channel_id,
         post.source_message_id, post.backup_id, post.reply_id,
         post.message_text, post.file_id,
