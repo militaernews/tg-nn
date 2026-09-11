@@ -31,6 +31,15 @@ def _looks_like_translation_error(text: str | None) -> bool:
     return not text or any(marker in text for marker in TRANSLATION_ERROR_MARKERS)
 
 
+class TranslationFailedError(Exception):
+    """Raised when DeepL, Google, MyMemory and the LLM fallback all fail to translate.
+
+    Posting the original (untranslated) text was tried before and led to posts going
+    out in the wrong language - raise instead so the caller skips the post and the
+    failure surfaces via error logging rather than silently reaching readers.
+    """
+
+
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Free OpenRouter models, tried in order, used only as a last-resort translation
 # fallback once DeepL and the free web-scrape translators have all failed.
@@ -188,8 +197,9 @@ def translate(text: str, is_caption: bool = False) -> str:
         try:
             translated_text = _translate_via_llm(text)
         except Exception as e:
-            logging.error(f"--- LLM translation failed, all providers exhausted --- {e}")
-            translated_text = text
+            raise TranslationFailedError(
+                f"All translation providers (DeepL, Google, MyMemory, LLM) failed: {e}"
+            ) from e
 
     translated_text = chunk_paragraphs(translated_text)
 
