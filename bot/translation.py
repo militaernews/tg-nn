@@ -1,10 +1,13 @@
+import asyncio
 import logging
+import threading
 
 import deepl
 import httpx
 import regex as re
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from deepl import QuotaExceededException, SplitSentences
+from googletrans import Translator as GoogletransTranslator
 from pyrogram import Client
 from pyrogram.enums import ParseMode
 from pyrogram.types import Message
@@ -40,14 +43,60 @@ class TranslationFailedError(Exception):
     """
 
 
+def _run_coro_blocking(coro):
+    """Run an async coroutine from sync code, even if a pyrogram event loop is
+    already running on this thread. googletrans's client is async-only, but the
+    rest of the translation cascade is synchronous, so give the coroutine its own
+    thread and event loop rather than reworking the whole cascade to be async.
+    """
+    result = {}
+
+    def runner():
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as e:
+            result["error"] = e
+
+    thread = threading.Thread(target=runner)
+    thread.start()
+    thread.join()
+
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
+def _translate_via_googletrans(text: str) -> str:
+    """Second, independent Google Translate client (googletrans instead of
+    deep_translator's GoogleTranslator) - a different implementation hitting
+    Google's endpoint differently, so it can succeed when the other is blocked
+    or rate-limited.
+    """
+    # raise_exception=True is required - by default googletrans swallows failures
+    # (e.g. a 429) and returns the original, untranslated text instead of raising,
+    # which is exactly the silent-failure mode this cascade exists to avoid.
+    translated = _run_coro_blocking(
+        GoogletransTranslator(raise_exception=True).translate(text, dest="de", src="auto")
+    )
+    return translated.text
+
+
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Free OpenRouter models, tried in order, used only as a last-resort translation
-# fallback once DeepL and the free web-scrape translators have all failed.
+# fallback once DeepL and the free web-scrape translators have all failed. OpenRouter's
+# free-tier catalog changes over time, so entries here occasionally go stale - that's
+# harmless, a stale model just fails fast and the loop moves to the next one.
 LLM_TRANSLATE_MODELS = [
     "google/gemini-2.0-flash-lite-preview-02-05:free",
     "google/gemini-2.0-flash-exp:free",
     "meta-llama/llama-3.1-8b-instruct:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
     "mistralai/mistral-7b-instruct:free",
+    "deepseek/deepseek-chat:free",
+    "deepseek/deepseek-r1:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free",
 ]
 
 
@@ -184,6 +233,13 @@ def translate(text: str, is_caption: bool = False) -> str:
             translated_text = GoogleTranslator(source='auto', target="de").translate(text=text)
         except Exception as e:
             logging.warning(f"--- Google translation failed --- {e}")
+            translated_text = None
+
+    if _looks_like_translation_error(translated_text):
+        try:
+            translated_text = _translate_via_googletrans(text)
+        except Exception as e:
+            logging.warning(f"--- googletrans translation failed --- {e}")
             translated_text = None
 
     if _looks_like_translation_error(translated_text):
