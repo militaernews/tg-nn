@@ -87,16 +87,12 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # free-tier catalog changes over time, so entries here occasionally go stale - that's
 # harmless, a stale model just fails fast and the loop moves to the next one.
 LLM_TRANSLATE_MODELS = [
-    "google/gemini-2.0-flash-lite-preview-02-05:free",
-    "google/gemini-2.0-flash-exp:free",
-    "meta-llama/llama-3.1-8b-instruct:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-7b-instruct:free",
-    "deepseek/deepseek-chat:free",
-    "deepseek/deepseek-r1:free",
-    "qwen/qwen-2.5-72b-instruct:free",
-    "google/gemma-2-9b-it:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "liquid/lfm-2.5-2.6b:free",
 ]
 
 
@@ -244,7 +240,7 @@ def translate(text: str, is_caption: bool = False) -> str:
 
     if _looks_like_translation_error(translated_text):
         try:
-            translated_text = MyMemoryTranslator(source='auto', target="de").translate(text)
+            translated_text = MyMemoryTranslator(source='auto', target="de-DE").translate(text)
         except Exception as e:
             logging.warning(f"--- MyMemory translation failed --- {e}")
             translated_text = None
