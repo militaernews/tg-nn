@@ -136,7 +136,8 @@ async def handle_giveaway_logic(client: Client, message: Message, cache) -> bool
 
 
 async def process_message_logic(client: Client, message: Message, cache,
-                                is_media_group: bool = False) -> None:
+                                is_media_group: bool = False,
+                                media_group_anchor_id: Optional[int] = None) -> None:
     start_time = time.perf_counter()
 
     # 0. Giveaways
@@ -207,7 +208,7 @@ async def process_message_logic(client: Client, message: Message, cache,
             msgs = await client.copy_media_group(
                 destination,
                 from_chat_id=CHANNEL_BACKUP,
-                message_id=message.id,
+                message_id=media_group_anchor_id if media_group_anchor_id is not None else message.id,
                 captions=formatted_text,
                 reply_to_message_id=reply_to_id,
             )
@@ -245,20 +246,41 @@ async def process_message_logic(client: Client, message: Message, cache,
 
 
 async def handle_backup_message(client: Client, message: Message, cache) -> None:
-    if message.media_group_id:
-        mg_id = message.media_group_id
-        async with media_group_locks[mg_id]:
-            media_groups[mg_id].append(message)
-            if len(media_groups[mg_id]) == 1:
-                await asyncio.sleep(2)
-                group = sorted(media_groups[mg_id], key=lambda m: m.id)
-                await process_message_logic(client, group[0], cache, is_media_group=True)
-                del media_groups[mg_id]
-                # Clean up the lock too
-                if mg_id in media_group_locks:
-                    del media_group_locks[mg_id]
-    else:
+    if not message.media_group_id:
         await process_message_logic(client, message, cache)
+        return
+
+    mg_id = message.media_group_id
+
+    # Only append while holding the lock, then release it immediately - if the
+    # lock were held across the sleep+processing below (as it used to be),
+    # every other part of the same album would block on acquiring it and
+    # only get to append *after* the first part had already been processed
+    # alone, so the album was posted one message at a time instead of as a
+    # group.
+    async with media_group_locks[mg_id]:
+        media_groups[mg_id].append(message)
+        is_first = len(media_groups[mg_id]) == 1
+
+    if not is_first:
+        return
+
+    await asyncio.sleep(2)
+
+    async with media_group_locks[mg_id]:
+        group = sorted(media_groups.pop(mg_id, []), key=lambda m: m.id)
+        media_group_locks.pop(mg_id, None)
+
+    if not group:
+        return
+
+    # Telegram puts the caption on only one message of the album, not
+    # necessarily the first - translate/route using that one, but always
+    # anchor copy_media_group on the group's first message so the caption
+    # ends up on the first entry of the album in the destination.
+    caption_msg = next((m for m in group if m.caption or m.text), group[0])
+    await process_message_logic(client, caption_msg, cache,
+                                is_media_group=True, media_group_anchor_id=group[0].id)
 
 
 async def main():
