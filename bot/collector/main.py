@@ -13,6 +13,7 @@ from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER
 from bot.db import get_accounts, get_source_ids_by_api_id, set_post, get_post, DBPool
 from bot.db_cache import get_cache
 from bot.error_logger import log_error
+from bot.watchdog import heartbeat
 from bot.model import Post
 
 # MediaGroup buffering - collect every part of an album before forwarding it
@@ -183,6 +184,9 @@ async def main():
     if not apps:
         logging.error("No accounts to start")
         return
+
+    for app in apps:
+        asyncio.create_task(heartbeat(app))
 
     try:
         await compose(apps)

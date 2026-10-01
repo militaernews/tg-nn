@@ -18,6 +18,7 @@ from bot.destination import get_destination
 from bot.error_logger import log_error
 from bot.model import Post
 from bot.translation import debloat_text, format_text, translate
+from bot.watchdog import heartbeat
 from bot.extension.militarnyi import get_militarnyi
 from bot.extension.postillon import get_postillon
 
@@ -322,6 +323,7 @@ async def main():
 
     await app.start()
     logging.info("Processor started, idling...")
+    asyncio.create_task(heartbeat(app))
 
     try:
         await asyncio.Event().wait()
