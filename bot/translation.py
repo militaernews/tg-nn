@@ -27,7 +27,20 @@ if DEEPL:
 # Free web-scrape translation endpoints (Google, MyMemory) occasionally return their
 # own error page as if it were a translation instead of raising - detect that so we
 # cascade to the next fallback rather than posting garbage.
-TRANSLATION_ERROR_MARKERS = ("Error 500", "That's an error", "That’s an error")
+TRANSLATION_ERROR_MARKERS = ("Error 500", "That's an error", "That’s an error",
+                             "IS AN INVALID SOURCE LANGUAGE", "INVALID TARGET LANGUAGE",
+                             "PLEASE SELECT TWO DISTINCT LANGUAGES", "MYMEMORY WARNING",
+                             "QUERY LENGTH LIMIT EXCEEDED")
+
+
+def _guess_mymemory_source(text: str) -> str:
+    """MyMemory rejects source='auto' (it returns the error message as the
+    'translation'), so pick a concrete source language from the script instead."""
+    if re.search(r"[іїєґІЇЄҐ]", text):
+        return "uk-UA"
+    if re.search(r"\p{Cyrillic}", text):
+        return "ru-RU"
+    return "en-GB"
 
 
 def _looks_like_translation_error(text: str | None) -> bool:
@@ -240,7 +253,7 @@ def translate(text: str, is_caption: bool = False) -> str:
 
     if _looks_like_translation_error(translated_text):
         try:
-            translated_text = MyMemoryTranslator(source='auto', target="de-DE").translate(text)
+            translated_text = MyMemoryTranslator(source=_guess_mymemory_source(text), target="de-DE").translate(text)
         except Exception as e:
             logging.warning(f"--- MyMemory translation failed --- {e}")
             translated_text = None

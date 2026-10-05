@@ -69,3 +69,60 @@ def test_translate_falls_back_to_second_google_client_when_first_fails(monkeypat
 
 if __name__ == "__main__":
     test_chunk_paragraphs()
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Росія атакувала Харків, їхні ракети", "uk-UA"),
+    ("Россия атаковала Харьков", "ru-RU"),
+    ("Russia attacked Kharkiv", "en-GB"),
+])
+def test_guess_mymemory_source_never_returns_auto(text, expected):
+    assert translation._guess_mymemory_source(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "'AUTO' IS AN INVALID SOURCE LANGUAGE . EXAMPLE: LANGPAIR=EN|IT USING 2 LETTER ISO OR RFC3066 LIKE ZH-CN.",
+    "PLEASE SELECT TWO DISTINCT LANGUAGES",
+    "MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY.",
+    "",
+    None,
+])
+def test_looks_like_translation_error_detects_mymemory_errors(text):
+    assert translation._looks_like_translation_error(text)
+
+
+def test_looks_like_translation_error_accepts_normal_translation():
+    assert not translation._looks_like_translation_error("Russland hat Charkiw angegriffen.")
+
+
+def test_translate_passes_concrete_source_to_mymemory_and_skips_error_text(monkeypatch):
+    monkeypatch.setattr(translation, "translator", None)
+
+    class FailingTranslator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def translate(self, *args, **kwargs):
+            raise Exception("boom")
+
+    monkeypatch.setattr(translation, "GoogleTranslator", FailingTranslator)
+    monkeypatch.setattr(translation, "_translate_via_googletrans",
+                        lambda text: (_ for _ in ()).throw(Exception("boom")))
+
+    sources = []
+
+    class ErrorTextMyMemory:
+        def __init__(self, source, target):
+            sources.append(source)
+
+        def translate(self, text):
+            return "'AUTO' IS AN INVALID SOURCE LANGUAGE . EXAMPLE: LANGPAIR=EN|IT"
+
+    monkeypatch.setattr(translation, "MyMemoryTranslator", ErrorTextMyMemory)
+    monkeypatch.setattr(translation, "_translate_via_llm", lambda text: "Übersetzt via LLM")
+
+    result = translate("Росія атакувала Харків")
+
+    assert sources == ["uk-UA"]
+    assert result == "Übersetzt via LLM"
+    assert "INVALID SOURCE" not in result
