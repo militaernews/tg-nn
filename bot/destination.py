@@ -48,11 +48,20 @@ def get_http_client() -> AsyncClient:
     return _http_client
 
 
+# Destinations defined by subject rather than geography. Their sources always
+# post there, and any other source's post that is mainly about the subject is
+# routed there too.
+TOPIC_DESTINATIONS = {
+    "it is interesting": "informatics, IT, software, programming, cybersecurity, hacking, data leaks, AI",
+}
+
+
 def _build_prompt(text: str, regions: list[str]) -> str:
     # Truncate early — LLMs don't need more than ~500 chars to classify region
     snippet = text[:500].replace("\n", " ").strip()
+    topics = "".join(f"- {name}: {subject}\n" for name, subject in TOPIC_DESTINATIONS.items() if name in regions)
     return (
-        f"Classify this news snippet into exactly ONE region: {', '.join(regions)}.\n\n"
+        f"Classify this news snippet into exactly ONE category: {', '.join(regions)}.\n\n"
         "Regions:\n"
         "- kaukasus: Armenia, Azerbaijan, Georgia\n"
         "- südamerika: South America\n"
@@ -60,9 +69,15 @@ def _build_prompt(text: str, regions: list[str]) -> str:
         "- ukraine: Ukraine, Russia-Ukraine war\n"
         "- asien: Asia (China, India, Japan, Korea, SE Asia)\n"
         "- naher osten: Middle East (Syria, Iran, Turkey, Saudi Arabia, Israel, Palestine)\n\n"
-        f'Text: "{snippet}"\n\n'
-        'Return ONLY JSON: {"region": "region_name", "confidence": 0.0-1.0}'
+        + (f"Topics (pick these over a region when the snippet is mainly about the topic):\n{topics}\n" if topics else "")
+        + f'Text: "{snippet}"\n\n'
+        'Return ONLY JSON: {"region": "category_name", "confidence": 0.0-1.0}'
     )
+
+
+def _is_topic_destination(destination: int, cache) -> bool:
+    dest_map = cache.get_destination_map()
+    return any(dest_map.get(name) == destination for name in TOPIC_DESTINATIONS)
 
 
 async def _call_llm(model: str, prompt: str) -> Optional[str]:
@@ -148,6 +163,9 @@ async def get_destination(text: str, source_id: int, cache) -> Optional[int]:
     if not source.destination:
         logging.warning(f"No default destination for source {source_id}")
         return None
+
+    if _is_topic_destination(source.destination, cache):
+        return source.destination
 
     destination = await route_message(text, source.destination, cache)
     logging.info(f"Source {source_id} → destination {destination}")
