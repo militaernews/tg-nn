@@ -9,7 +9,8 @@ from pyrogram import Client, filters, compose
 from pyrogram.enums import ParseMode
 from pyrogram.types import Message
 
-from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER
+from bot.chat_dump import dump_chats
+from bot.config import CHANNEL_BACKUP, PASSWORD, CONTAINER, LOG_GROUP_ID, ADMINS
 from bot.db import get_accounts, get_source_ids_by_api_id, set_post, get_post, DBPool
 from bot.db_cache import get_cache
 from bot.error_logger import log_error
@@ -133,6 +134,17 @@ async def main():
             parse_mode=ParseMode.HTML,
         )
 
+        @app.on_message(filters.chat(LOG_GROUP_ID) & filters.user(ADMINS) & filters.command("chats"))
+        async def handle_chats_command(client: Client, message: Message, account_name=a.name):
+            try:
+                file, caption = await dump_chats(client, cache, account_name)
+                await message.reply_document(file, caption=caption, quote=True)
+            except Exception as e:
+                logging.error(f"/chats failed for {client.name}: {e}")
+                await log_error(client, e, f"[collector] /chats for {client.name}")
+
+        apps.append(app)
+
         sources = await get_source_ids_by_api_id(a.api_id)
         if not sources:
             logging.warning(f"No active sources for {a.name}")
@@ -178,8 +190,6 @@ async def main():
                 # add_error_handler) - catch here so nothing goes unreported.
                 logging.error(f"Unhandled error in handle_incoming for {message.chat.id}/{message.id}: {e}")
                 await log_error(client, e, f"[collector] handle_incoming {message.chat.id}/{message.id}")
-
-        apps.append(app)
 
     if not apps:
         logging.error("No accounts to start")

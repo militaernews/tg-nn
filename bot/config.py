@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime
 from typing import Final
@@ -16,6 +17,9 @@ GROUP_LOG = -1001723195485
 # distinct from GROUP_LOG above, which is tg-nn's own group for other logging.
 LOG_GROUP_ID = int(os.getenv("LOG_GROUP_ID", -1001338514957))
 THREAD_ID = int(os.getenv("THREAD_ID", 488))  # tg-nn topic
+
+# Telegram user ids allowed to run account commands (e.g. /chats) in the LOG_GROUP_ID topic.
+ADMINS = json.loads(os.getenv("ADMINS", "[703453307]"))
 
 CHANNEL_UA = -1001839268196
 
