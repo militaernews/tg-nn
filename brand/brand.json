@@ -1,0 +1,7 @@
+{
+  "name": "NEWSMIX",
+  "icon": "icon.svg",
+  "tagline": ["Hundreds of news channels,", "one feed per region."],
+  "tags": "TRANSLATED · CLEANED UP · SORTED BY REGION",
+  "out": "."
+}

@@ -1,0 +1,27 @@
+<!-- Icon fragment for the militaernews/tools brand generator: news from around the globe flowing into one feed -->
+<g>
+	<circle cx="170" cy="256" r="84" fill="#082a52"/>
+	<g fill="none" stroke="#2ec5ff" stroke-opacity=".7" stroke-width="4">
+		<ellipse cx="170" cy="256" rx="36" ry="84"/>
+		<path d="M86 256H254M98 214H242M98 298H242"/>
+	</g>
+	<circle cx="170" cy="256" r="84" fill="none" stroke="#bdefff" stroke-width="6" filter="url(#glow)"/>
+	<g fill="none" stroke="#9be7ff" stroke-width="7" stroke-linecap="round">
+		<path d="M236 196Q280 196 300 226"/>
+		<path d="M256 256H300"/>
+		<path d="M236 316Q280 316 300 286"/>
+	</g>
+	<path d="M296 214L318 230L294 240Z M298 244L322 256L298 268Z M294 272L318 282L296 298Z" fill="#9be7ff"/>
+	<rect x="330" y="150" width="120" height="212" rx="12" fill="#082a52"/>
+	<rect x="344" y="166" width="92" height="44" rx="5" fill="#2ec5ff" fill-opacity=".9"/>
+	<rect x="352" y="176" width="54" height="7" rx="2" fill="#f2fbff"/>
+	<rect x="352" y="190" width="38" height="6" rx="2" fill="#f2fbff" fill-opacity=".8"/>
+	<rect x="344" y="220" width="92" height="44" rx="5" fill="#1f6fae"/>
+	<rect x="352" y="230" width="62" height="7" rx="2" fill="#9be7ff"/>
+	<rect x="352" y="244" width="44" height="6" rx="2" fill="#9be7ff" fill-opacity=".8"/>
+	<rect x="344" y="274" width="92" height="44" rx="5" fill="#0f4c81"/>
+	<rect x="352" y="284" width="50" height="7" rx="2" fill="#2ec5ff"/>
+	<rect x="352" y="298" width="58" height="6" rx="2" fill="#f2fbff" fill-opacity=".7"/>
+	<rect x="344" y="328" width="60" height="8" rx="3" fill="#9be7ff" fill-opacity=".6"/>
+	<rect x="330" y="150" width="120" height="212" rx="12" fill="none" stroke="#bdefff" stroke-width="5" filter="url(#glow)"/>
+</g>
